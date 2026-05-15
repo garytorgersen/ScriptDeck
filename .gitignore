@@ -1,0 +1,46 @@
+# ----- .NET / MSBuild build output -----
+**/bin/
+**/obj/
+*.pdb
+
+# ----- Visual Studio per-user / cache -----
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.cache
+*.tmp.json
+
+# Rider / VSCode
+.idea/
+.vscode/
+
+# ----- NuGet -----
+*.nupkg
+packages/
+project.lock.json
+.packagessearch.cache
+
+# ----- Test output -----
+[Tt]est[Rr]esults/
+*.trx
+*.coverage
+*.coveragexml
+
+# ----- ScriptDeck reference material (per repo decision) -----
+# The original FESA PowerShell-Forms project lives here only as
+# reference material for the in-repo audit work. Keeping it out
+# of git per the project owner's choice.
+ORIGINAL_SOURCE/
+
+# ----- Misc -----
+Thumbs.db
+*.swp
+*~
+~$*
+.DS_Store
+
+# ----- Claude / agent state -----
+# Per-user agent settings; shouldn't sync.
+.claude/

@@ -1,0 +1,79 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>ScriptDeck</RootNamespace>
+    <AssemblyName>ScriptDeck</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>0.1.0</Version>
+    <Product>ScriptDeck</Product>
+    <Description>User-customizable script and command launcher (PowerShell / CMD / Process)</Description>
+    <Copyright>Copyright (c) 2026</Copyright>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Expose internals to the test project so xunit tests can manipulate
+         internal-set properties on Job, drive the Dispatcher without
+         going through Shell, etc. The attribute is scoped to a single
+         assembly name so the production surface stays tight. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ScriptDeck.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- PS 5.1 ships with every Windows 10+ install. The Reference Assemblies
+         path is only present when the Windows SDK / WMF SDK is installed; the
+         GAC path is the universally available fallback. The dual hint covers
+         dev boxes with the SDK and end-user machines without it. -->
+    <Reference Include="System.Management.Automation">
+      <HintPath Condition="Exists('C:\Program Files\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\System.Management.Automation.dll')">C:\Program Files\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\System.Management.Automation.dll</HintPath>
+      <HintPath Condition="!Exists('C:\Program Files\Reference Assemblies\Microsoft\WindowsPowerShell\3.0\System.Management.Automation.dll')">C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Management.Automation\v4.0_3.0.0.0__31bf3856ad364e35\System.Management.Automation.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- System.Text.Json's net48 story is rough (transitive deps, ABI quirks).
+         Newtonsoft is bombproof, well-known, and trivially serializes the
+         workspace POCOs without attribute noise. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <!-- Run history (Phase 6). 6.0.x is the last line that targets
+         netstandard2.0 *and* still receives security fixes; 7+ keeps net48
+         working but advertises it less prominently. The bundle_e_sqlite3
+         provider drops the native SQLite dll into the output dir so net48
+         apps don't need an external sqlite3.dll on PATH. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="6.0.36" />
+    <!-- Embedded code editor for the Script Editor dialog. 3.6.6 is the
+         last release of the original jacobslusser line; targets net40 so
+         it slots cleanly into a net48 host. Newer ScintillaNET forks
+         (5.x+) require .NET 6 and aren't compatible with this TFM. -->
+    <PackageReference Include="jacobslusser.ScintillaNET" Version="3.6.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Sample workspaces (and their referenced scripts) ship next to
+         the EXE so a fresh install has something to load + run. Users
+         can save their own anywhere. The glob deliberately catches
+         .json/.ps1/.cmd/.bat/.txt so demo scripts come along too. -->
+    <Content Include="Workspaces\**\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+
+    <!-- Bootstrap script dot-sourced into the long-lived runspace at
+         startup. PowerShellExecutor probes AppContext.BaseDirectory for
+         exactly this filename, so it must land in the same folder as
+         the EXE (not a subfolder). -->
+    <Content Include="ScriptDeck.Bootstrap.ps1">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

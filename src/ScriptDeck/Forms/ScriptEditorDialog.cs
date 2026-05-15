@@ -1,0 +1,751 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using ScintillaNET;
+using ScriptDeck.Hosting;
+
+namespace ScriptDeck.Forms
+{
+    /// <summary>
+    /// In-app PowerShell editor with Run-Test-against-the-live-runspace.
+    ///
+    /// Goals:
+    ///   - Let users compose a .ps1 without leaving ScriptDeck.
+    ///   - "Run Test" exercises the script in the SAME long-lived
+    ///     runspace button clicks use, so the user sees identical
+    ///     behavior (shared inputs, bootstrap helpers, $global state).
+    ///   - History recording is suppressed for tests via
+    ///     <c>ExecutionRequest.SkipHistory</c> -- iterating on a script
+    ///     shouldn't fill the audit trail with scratch rows.
+    ///   - Always-on syntax check via <see cref="ScriptValidator"/>;
+    ///     debounced so we don't reparse on every keystroke.
+    ///
+    /// Phase 1 scope: PowerShell only. Format / lint live in Phase 2.
+    /// </summary>
+    public partial class ScriptEditorDialog : Form
+    {
+        private readonly Dispatcher _dispatcher;
+        private readonly string _scriptsRoot;
+
+        // The output sink is constructed lazily in the constructor so we
+        // can hand it directly to the dispatcher's per-call sink override.
+        private readonly RtbSink _testSink;
+
+        // Snapshot of the workspace's shared inputs at the moment the
+        // dialog opened, plus their normalize rules. The grid lets the
+        // user override values for tests; on Run Test we apply the same
+        // normalization a real button click would, so test runs and real
+        // runs see identical $variable values.
+        private readonly List<SharedInputSnapshot> _inputSnapshot;
+
+        // Path the script will save to. Empty when this is a new script
+        // that hasn't been Save-As'd yet. Updated on Save / Save As.
+        private string _currentPath;
+
+        // Snapshot of the editor text at the last successful Save or
+        // initial Load, so we can detect "modified since" for the title
+        // asterisk and the close-prompt.
+        private string _savedText = string.Empty;
+
+        // Debounce timer for syntax validation. ScriptValidator is fast
+        // (single-digit ms for typical scripts) but reparsing on every
+        // key event still makes the editor feel jumpy on long files.
+        private readonly Timer _validateTimer;
+
+        // True between Run Test click and dispatcher completion. Drives
+        // button enable/disable in UpdateButtons().
+        private volatile bool _testRunning;
+
+        // Backward-compatible 3-arg ctor: callers that don't yet know
+        // about shared-input snapshots get an empty grid (no test
+        // overrides available, but everything else still works).
+        public ScriptEditorDialog(Dispatcher dispatcher, string scriptsRoot, string initialPath)
+            : this(dispatcher, scriptsRoot, initialPath, sharedInputs: null) { }
+
+        public ScriptEditorDialog(
+            Dispatcher dispatcher,
+            string scriptsRoot,
+            string initialPath,
+            IList<SharedInputSnapshot> sharedInputs)
+        {
+            _dispatcher  = dispatcher  ?? throw new ArgumentNullException(nameof(dispatcher));
+            _scriptsRoot = scriptsRoot;
+            _currentPath = initialPath ?? string.Empty;
+            _inputSnapshot = sharedInputs == null
+                ? new List<SharedInputSnapshot>()
+                : new List<SharedInputSnapshot>(sharedInputs);
+
+            InitializeComponent();
+            ConfigureScintilla();
+            ConfigureInputsGrid();
+
+            _testSink = new RtbSink(richTextBox_Output);
+
+            _validateTimer = new Timer { Interval = 350 };
+            _validateTimer.Tick += (_, __) =>
+            {
+                _validateTimer.Stop();
+                RunSyntaxCheck();
+            };
+
+            // Hook the editor's text-changed event AFTER configuration so
+            // the initial style assignment doesn't flag "modified".
+            scintilla_Editor.TextChanged += (_, __) =>
+            {
+                _validateTimer.Stop();
+                _validateTimer.Start();
+                UpdateTitle();
+            };
+
+            textBox_Path.Text = _currentPath;
+            LoadInitialContent();
+            UpdateTitle();
+            UpdateButtons();
+            RunSyntaxCheck();
+
+            // Esc cancels a running test (similar to the main Shell's
+            // KeyPreview wiring); when nothing is running, Esc closes.
+            // The CancelButton hookup handles the close case for free.
+            this.KeyDown += ScriptEditorDialog_KeyDown;
+
+            // Subscribe to dispatcher busy changes so a Run started here
+            // (or anywhere) updates the button state correctly. The main
+            // Shell still owns the dispatcher; we just observe.
+            _dispatcher.BusyChanged += Dispatcher_BusyChanged;
+        }
+
+        public string SavedPath => _currentPath;
+
+        // ----------------------------------------------------------------
+        // Editor configuration
+        // ----------------------------------------------------------------
+
+        // Style indices used below. ScintillaNET's lexer tags tokens with
+        // numeric "style" ids (0..STYLE_MAX); we set foreground colors
+        // for the ones the lexer emits. Names match ScintillaNET's
+        // Style.Cpp constants for readability, even though we point the
+        // lexer at the nearer-fit "Cpp" lexer rather than a true PS one.
+        private void ConfigureScintilla()
+        {
+            var s = scintilla_Editor;
+
+            // Monospace font, sensible size.
+            var font = "Consolas";
+            s.Styles[Style.Default].Font = font;
+            s.Styles[Style.Default].Size = 10;
+            s.StyleClearAll(); // propagate the default to every style slot
+
+            // Line numbers in margin 0. Width auto-sizes when document
+            // grows past 999 lines (rare for a single-button script).
+            s.Margins[0].Type = MarginType.Number;
+            s.Margins[0].Width = 36;
+
+            // Tab = 4 spaces, no auto-indent magic. PowerShell convention
+            // is mixed but 4-space tabs render predictably.
+            s.UseTabs = false;
+            s.TabWidth = 4;
+            s.IndentWidth = 4;
+
+            // Brace match on { } [ ] ( ) -- indispensable in any PS
+            // script with nested scriptblocks.
+            s.UpdateUI += (_, e) =>
+            {
+                if ((e.Change & UpdateChange.Selection) == 0) return;
+                int caret = s.CurrentPosition;
+                int charBefore = caret > 0 ? s.GetCharAt(caret - 1) : 0;
+                int matchPos = -1;
+                if (IsBraceChar(charBefore))
+                {
+                    matchPos = s.BraceMatch(caret - 1);
+                    if (matchPos != -1) s.BraceHighlight(caret - 1, matchPos);
+                    else s.BraceBadLight(caret - 1);
+                }
+                else
+                {
+                    s.BraceHighlight(-1, -1);
+                }
+            };
+
+            // Lexer: ScintillaNET's PowerShell lexer is the natural fit.
+            // We set keyword set 0 (cmdlets / language keywords) and let
+            // the rest fall back to default style. Style ids come from
+            // Style.PowerShell.* in ScintillaNET.
+            s.Lexer = Lexer.PowerShell;
+            s.SetKeywords(0,
+                "if else elseif while do for foreach in switch break continue " +
+                "return throw try catch finally function param begin process end " +
+                "filter class enum hidden static public private using module " +
+                "trap data dynamicparam exit");
+            // Keyword set 1 = common cmdlet verbs so noun completion looks
+            // approximately right out of the box. Not exhaustive on purpose;
+            // users can tweak in the bootstrap if they care to.
+            s.SetKeywords(1,
+                "Get Set New Remove Add Clear Find Format Out " +
+                "Import Export ConvertFrom ConvertTo Invoke Start Stop Restart " +
+                "Test Update Write Read Select Where ForEach Sort Group Measure " +
+                "Enable Disable Resolve Search");
+
+            // Color the lexer-emitted styles. PowerShell lexer style ids
+            // live under Style.PowerShell.*. Pick high-contrast colors
+            // that read on the default white background.
+            s.Styles[Style.PowerShell.Default].ForeColor       = Color.Black;
+            s.Styles[Style.PowerShell.Comment].ForeColor       = Color.FromArgb(0, 128, 0);
+            s.Styles[Style.PowerShell.String].ForeColor        = Color.FromArgb(163, 21, 21);
+            s.Styles[Style.PowerShell.Character].ForeColor     = Color.FromArgb(163, 21, 21);
+            s.Styles[Style.PowerShell.Number].ForeColor        = Color.FromArgb(0, 0, 200);
+            s.Styles[Style.PowerShell.Variable].ForeColor      = Color.FromArgb(128, 0, 128);
+            s.Styles[Style.PowerShell.Operator].ForeColor      = Color.FromArgb(80, 80, 80);
+            s.Styles[Style.PowerShell.Identifier].ForeColor    = Color.Black;
+            s.Styles[Style.PowerShell.Keyword].ForeColor       = Color.Blue;
+            s.Styles[Style.PowerShell.Cmdlet].ForeColor        = Color.FromArgb(0, 96, 160);
+            s.Styles[Style.PowerShell.Alias].ForeColor         = Color.FromArgb(0, 96, 160);
+            s.Styles[Style.PowerShell.CommentStream].ForeColor = Color.FromArgb(0, 128, 0);
+            s.Styles[Style.PowerShell.HereString].ForeColor    = Color.FromArgb(163, 21, 21);
+            s.Styles[Style.PowerShell.HereCharacter].ForeColor = Color.FromArgb(163, 21, 21);
+            s.Styles[Style.PowerShell.CommentDocKeyword].ForeColor = Color.FromArgb(0, 96, 160);
+
+            // Brace match colors: green for matched, red for mismatched.
+            s.Styles[Style.BraceLight].ForeColor = Color.LimeGreen;
+            s.Styles[Style.BraceLight].Bold = true;
+            s.Styles[Style.BraceBad].ForeColor = Color.Red;
+            s.Styles[Style.BraceBad].Bold = true;
+        }
+
+        private static bool IsBraceChar(int c) =>
+            c == '{' || c == '}' || c == '(' || c == ')' || c == '[' || c == ']';
+
+        // ----------------------------------------------------------------
+        // Shared-input grid
+        // ----------------------------------------------------------------
+
+        private void ConfigureInputsGrid()
+        {
+            var g = dataGridView_Inputs;
+
+            // Two columns: id (read-only, narrow) and value (editable,
+            // takes remaining width). We DO NOT data-bind to the
+            // snapshot list because the user often doesn't select rows
+            // -- they tab in, type, tab out -- and a binding would force
+            // us to re-read the bound value on cell-change events. A
+            // direct cell read on Run Test is simpler and more robust.
+            var colId = new DataGridViewTextBoxColumn
+            {
+                Name = "Id",
+                HeaderText = "id",
+                ReadOnly = true,
+                Width = 160,
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
+            };
+            var colVal = new DataGridViewTextBoxColumn
+            {
+                Name = "Value",
+                HeaderText = "value",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
+            };
+            g.Columns.Add(colId);
+            g.Columns.Add(colVal);
+
+            if (_inputSnapshot.Count == 0)
+            {
+                // Empty state: dim the label so users don't think the
+                // grid is broken, just absent. Keeps the UI predictable
+                // when the editor is launched with no workspace open.
+                label_Inputs.Text = "Test inputs: (no shared inputs in this workspace)";
+                g.Enabled = false;
+                return;
+            }
+
+            foreach (var snap in _inputSnapshot)
+            {
+                int rowIdx = g.Rows.Add(snap.Id ?? string.Empty, snap.Value ?? string.Empty);
+                // Stash the snapshot on the row so the Run Test path can
+                // pull the Normalize flag back out without a parallel
+                // dictionary lookup. Tag is `object` so we can put any
+                // ref type here without ceremony.
+                g.Rows[rowIdx].Tag = snap;
+                // Tooltip shows the human label + normalization hint --
+                // the id alone often isn't self-describing.
+                if (!string.IsNullOrEmpty(snap.Label))
+                    g.Rows[rowIdx].Cells[0].ToolTipText = snap.Label;
+            }
+        }
+
+        // Build a name -> value dictionary from the grid's current
+        // contents and apply the same normalization rules Shell uses on
+        // a real button click. Exposed as a method (not a property) to
+        // emphasise that it's read-time, not load-time -- the user may
+        // edit the grid mid-session.
+        private IDictionary<string, string> CollectInputsForTest()
+        {
+            var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (DataGridViewRow row in dataGridView_Inputs.Rows)
+            {
+                if (row.IsNewRow) continue;
+                string id = row.Cells["Id"].Value?.ToString();
+                if (string.IsNullOrEmpty(id)) continue;
+                string val = row.Cells["Value"].Value?.ToString() ?? string.Empty;
+
+                // Apply normalize rule (same as Shell.NormalizeSharedInputs).
+                var snap = row.Tag as SharedInputSnapshot;
+                if (snap != null
+                    && string.Equals(snap.Normalize, "computerName", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (string.IsNullOrWhiteSpace(val)
+                        || string.Equals(val, ".",         StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(val, "localhost", StringComparison.OrdinalIgnoreCase))
+                    {
+                        val = Environment.MachineName;
+                    }
+                }
+                dict[id] = val;
+            }
+            return dict;
+        }
+
+        // ----------------------------------------------------------------
+        // Load / Save
+        // ----------------------------------------------------------------
+
+        private void LoadInitialContent()
+        {
+            if (string.IsNullOrEmpty(_currentPath) || !File.Exists(_currentPath))
+            {
+                _savedText = string.Empty;
+                scintilla_Editor.Text = string.Empty;
+                return;
+            }
+            try
+            {
+                _savedText = File.ReadAllText(_currentPath);
+                scintilla_Editor.Text = _savedText;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this,
+                    $"Could not read file:\n{ex.Message}",
+                    "Open Script", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                _savedText = string.Empty;
+                scintilla_Editor.Text = string.Empty;
+            }
+        }
+
+        private bool TrySave(string path)
+        {
+            try
+            {
+                File.WriteAllText(path, scintilla_Editor.Text);
+                _currentPath = path;
+                textBox_Path.Text = path;
+                _savedText = scintilla_Editor.Text;
+                UpdateTitle();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this,
+                    $"Could not save file:\n{ex.Message}",
+                    "Save Script", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+        }
+
+        private bool IsDirty => !string.Equals(scintilla_Editor.Text ?? string.Empty, _savedText ?? string.Empty, StringComparison.Ordinal);
+
+        private void UpdateTitle()
+        {
+            string baseTitle = "Script Editor";
+            string fileName = string.IsNullOrEmpty(_currentPath) ? "(new)" : Path.GetFileName(_currentPath);
+            this.Text = $"{baseTitle} - {fileName}{(IsDirty ? " *" : string.Empty)}";
+        }
+
+        // ----------------------------------------------------------------
+        // Syntax check (runs on a debounce timer hooked to TextChanged)
+        // ----------------------------------------------------------------
+
+        private void RunSyntaxCheck()
+        {
+            var issues = ScriptValidator.Validate(scintilla_Editor.Text);
+            if (issues.Count == 0)
+            {
+                statusLabel_Syntax.Text = "Syntax: OK";
+                statusLabel_Syntax.ForeColor = SystemColors.ControlText;
+                return;
+            }
+
+            // Show the count + the first error inline so the user gets
+            // something actionable without opening a side panel. Lint /
+            // a richer error list belongs to Phase 2.
+            var first = issues[0];
+            statusLabel_Syntax.Text =
+                $"Syntax: {issues.Count} error(s) -- line {first.Line}: {Truncate(first.Message, 90)}";
+            statusLabel_Syntax.ForeColor = Color.Firebrick;
+        }
+
+        private static string Truncate(string s, int max)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            return s.Length <= max ? s : s.Substring(0, max - 1) + "…";
+        }
+
+        // ----------------------------------------------------------------
+        // Test execution
+        // ----------------------------------------------------------------
+
+        private async void Button_RunTest_Click(object sender, EventArgs e)
+        {
+            if (_testRunning) return;
+
+            // Refuse to run if there are syntax errors -- saves the user
+            // from getting a "ParserError" dump in the output pane and
+            // lets them fix the editor first.
+            var issues = ScriptValidator.Validate(scintilla_Editor.Text);
+            if (issues.Count > 0)
+            {
+                richTextBox_Output.Clear();
+                _testSink.WriteError(
+                    $"Refusing to run: {issues.Count} syntax error(s).\r\n" +
+                    $"  Line {issues[0].Line}, Col {issues[0].Column}: {issues[0].Message}\r\n");
+                return;
+            }
+
+            // Write the editor text to a scratch file so the existing
+            // PowerShellExecutor (which expects a .ps1 path) can run it
+            // unchanged. Using a stable filename keeps debugging easier
+            // than per-run guids and avoids accumulating temp files.
+            string scratchDir = Path.Combine(Path.GetTempPath(), "ScriptDeck");
+            string scratchPath = Path.Combine(scratchDir, "scratch.ps1");
+            try
+            {
+                Directory.CreateDirectory(scratchDir);
+                File.WriteAllText(scratchPath, scintilla_Editor.Text);
+            }
+            catch (Exception ex)
+            {
+                _testSink.WriteError($"Could not write scratch file: {ex.Message}\r\n");
+                return;
+            }
+
+            // Clear the output pane between runs. The dispatcher writes a
+            // visual separator after every dispatch, but starting clean
+            // is friendlier when the previous run produced a wall of text.
+            richTextBox_Output.Clear();
+
+            _testRunning = true;
+            UpdateButtons();
+
+            try
+            {
+                string format = (comboBox_Format.SelectedItem as string) ?? "default";
+
+                var req = new ExecutionRequest
+                {
+                    ScriptPath    = scratchPath,
+                    Args          = new List<string>(),
+                    ButtonLabel   = "(Test from editor)",
+                    OutputTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "rtb" },
+                    SkipHistory   = true,
+                    // Pull live values out of the inputs grid, normalized
+                    // the same way Shell normalizes them for real button
+                    // clicks. A test run sees identical $variable values.
+                    SharedInputs  = CollectInputsForTest(),
+                    // Editor-local format override -- doesn't touch the
+                    // saved button (if any). Lets users preview list /
+                    // table / json / csv side-by-side without committing.
+                    RtbFormat     = string.Equals(format, "default", StringComparison.OrdinalIgnoreCase) ? null : format,
+                };
+
+                await _dispatcher.ExecuteAsync(req, "powershell", _testSink).ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                _testSink.WriteError($"Test dispatch failed: {ex.Message}\r\n");
+            }
+            finally
+            {
+                _testRunning = false;
+                UpdateButtons();
+            }
+        }
+
+        private void Button_CancelTest_Click(object sender, EventArgs e)
+        {
+            // Same plumbing as the Shell's Esc handler -- the dispatcher
+            // owns cancellation; we just ask it to cancel whatever's
+            // active. (If the user somehow started a button-click run
+            // from the main window while the test was in flight, the
+            // dispatcher's single-flight gate prevents that, so this
+            // will only ever cancel our own test.)
+            try { _dispatcher.CancelActive(); } catch { /* swallow */ }
+        }
+
+        private void Dispatcher_BusyChanged(object sender, EventArgs e)
+        {
+            if (this.IsDisposed) return;
+            if (this.InvokeRequired)
+            {
+                try { this.BeginInvoke((Action)UpdateButtons); } catch { /* form closing */ }
+            }
+            else
+            {
+                UpdateButtons();
+            }
+        }
+
+        private void UpdateButtons()
+        {
+            bool busy = _dispatcher.IsBusy;
+            button_RunTest.Enabled = !busy;
+            button_CancelTest.Enabled = busy && _testRunning;
+            button_Save.Enabled = !busy;
+            button_SaveAs.Enabled = !busy;
+            statusLabel_RunState.Text = busy ? (_testRunning ? "Running test..." : "Busy") : "Idle";
+            statusLabel_RunState.ForeColor = busy ? Color.DeepSkyBlue : SystemColors.ControlText;
+        }
+
+        // ----------------------------------------------------------------
+        // Save / Save As / Browse / Insert Template / Close
+        // ----------------------------------------------------------------
+
+        private void Button_Save_Click(object sender, EventArgs e)
+        {
+            if (string.IsNullOrEmpty(_currentPath))
+            {
+                Button_SaveAs_Click(sender, e);
+                return;
+            }
+            TrySave(_currentPath);
+        }
+
+        private void Button_SaveAs_Click(object sender, EventArgs e)
+        {
+            using (var dlg = new SaveFileDialog
+            {
+                Title = "Save Script As",
+                Filter = "PowerShell scripts (*.ps1)|*.ps1|All files (*.*)|*.*",
+                DefaultExt = "ps1",
+                AddExtension = true,
+                OverwritePrompt = true,
+                InitialDirectory = !string.IsNullOrEmpty(_scriptsRoot) && Directory.Exists(_scriptsRoot)
+                    ? _scriptsRoot
+                    : (string.IsNullOrEmpty(_currentPath) ? null : Path.GetDirectoryName(_currentPath)),
+                FileName = string.IsNullOrEmpty(_currentPath) ? "NewScript.ps1" : Path.GetFileName(_currentPath),
+            })
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                if (TrySave(dlg.FileName))
+                {
+                    // Mark the dialog as "successful save happened" so
+                    // the parent (e.g. EditButtonDialog) can read
+                    // SavedPath afterwards. We DON'T close on Save -- the
+                    // user often saves mid-edit then keeps iterating.
+                    this.DialogResult = DialogResult.OK;
+                }
+            }
+        }
+
+        private void Button_Browse_Click(object sender, EventArgs e)
+        {
+            // Open an existing script from disk. If the editor is dirty,
+            // prompt before discarding.
+            if (IsDirty && !ConfirmDiscard("open another script")) return;
+
+            using (var dlg = new OpenFileDialog
+            {
+                Title = "Open Script",
+                Filter = "PowerShell scripts (*.ps1)|*.ps1|All files (*.*)|*.*",
+                CheckFileExists = true,
+                InitialDirectory = !string.IsNullOrEmpty(_scriptsRoot) && Directory.Exists(_scriptsRoot)
+                    ? _scriptsRoot
+                    : null,
+            })
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                _currentPath = dlg.FileName;
+                textBox_Path.Text = _currentPath;
+                LoadInitialContent();
+                UpdateTitle();
+                RunSyntaxCheck();
+            }
+        }
+
+        private void Button_InsertTemplate_Click(object sender, EventArgs e)
+        {
+            // Replace the editor contents with the starter template only
+            // if the editor is empty. Otherwise insert at caret position
+            // -- the user might want to drop the boilerplate inside an
+            // already-partial script.
+            string template =
+                "# <Description of what this button does>\r\n" +
+                "# Shared inputs available as variables: $ComputerName (and any\r\n" +
+                "# others defined in the workspace's sharedInputs).\r\n" +
+                "\r\n" +
+                "if (Test-IsLocalTarget) {\r\n" +
+                "    # Local code path\r\n" +
+                "\r\n" +
+                "} else {\r\n" +
+                "    # Remote code path\r\n" +
+                "    Invoke-Command -ComputerName $ComputerName -ScriptBlock {\r\n" +
+                "\r\n" +
+                "    }\r\n" +
+                "}\r\n";
+
+            if (string.IsNullOrWhiteSpace(scintilla_Editor.Text))
+            {
+                scintilla_Editor.Text = template;
+                scintilla_Editor.GotoPosition(template.Length);
+            }
+            else
+            {
+                scintilla_Editor.InsertText(scintilla_Editor.CurrentPosition, template);
+            }
+        }
+
+        private void Button_Close_Click(object sender, EventArgs e)
+        {
+            // Form.DialogResult = Cancel from the Designer drives the
+            // close. The FormClosing handler does the dirty-check.
+            this.Close();
+        }
+
+        private void ScriptEditorDialog_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            if (_testRunning)
+            {
+                var dr = MessageBox.Show(this,
+                    "A test is still running. Close anyway?",
+                    "Close Editor",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+                if (dr != DialogResult.Yes) { e.Cancel = true; return; }
+                try { _dispatcher.CancelActive(); } catch { /* swallow */ }
+            }
+
+            if (IsDirty)
+            {
+                var dr = MessageBox.Show(this,
+                    "You have unsaved changes. Save before closing?",
+                    "Close Editor",
+                    MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button1);
+                if (dr == DialogResult.Cancel) { e.Cancel = true; return; }
+                if (dr == DialogResult.Yes)
+                {
+                    if (string.IsNullOrEmpty(_currentPath))
+                    {
+                        Button_SaveAs_Click(sender, EventArgs.Empty);
+                        // If the user cancelled the Save As, IsDirty is
+                        // still true -- bail out of the close so the
+                        // user can try again.
+                        if (IsDirty) { e.Cancel = true; return; }
+                    }
+                    else
+                    {
+                        if (!TrySave(_currentPath)) { e.Cancel = true; return; }
+                    }
+                }
+            }
+
+            try { _dispatcher.BusyChanged -= Dispatcher_BusyChanged; } catch { }
+            try { _validateTimer?.Dispose(); } catch { }
+        }
+
+        private void ScriptEditorDialog_KeyDown(object sender, KeyEventArgs e)
+        {
+            // Esc -> cancel test if running, otherwise let the form's
+            // CancelButton (button_Close) handle it.
+            if (e.KeyCode == Keys.Escape && _testRunning)
+            {
+                try { _dispatcher.CancelActive(); } catch { }
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            // Ctrl+S -> Save (matches the rest of the app's shortcut convention).
+            else if (e.Control && e.KeyCode == Keys.S)
+            {
+                Button_Save_Click(sender, EventArgs.Empty);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            // F5 -> Run Test (industry standard for "run").
+            else if (e.KeyCode == Keys.F5 && !_testRunning)
+            {
+                Button_RunTest_Click(sender, EventArgs.Empty);
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+        }
+
+        private bool ConfirmDiscard(string action)
+        {
+            var dr = MessageBox.Show(this,
+                $"You have unsaved changes. Discard and {action}?",
+                "Unsaved Changes",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+            return dr == DialogResult.Yes;
+        }
+
+        // ----------------------------------------------------------------
+        // RtbSink -- IOutputSink that pipes into the dialog's output RTB.
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// Lightweight IOutputSink for the editor's output pane. Thread-safe
+        /// via the standard WinForms Invoke/BeginInvoke marshal -- the
+        /// dispatcher writes from the executor's thread, the RTB lives on
+        /// the UI thread.
+        ///
+        /// Grid methods are no-ops: the editor doesn't render structured
+        /// data. If a tested script emits PSObjects, only their ToString
+        /// representation lands here -- which is fine for "did it run"
+        /// validation. For the full structured view, save and click the
+        /// real button.
+        /// </summary>
+        private sealed class RtbSink : IOutputSink
+        {
+            private readonly RichTextBox _rtb;
+
+            public RtbSink(RichTextBox rtb) { _rtb = rtb; }
+
+            public void WriteOutput (string text) => Append(text, Color.LightGray);
+            public void WriteError  (string text) => Append(text, Color.OrangeRed);
+            public void WriteWarning(string text) => Append(text, Color.Goldenrod);
+            public void WriteInfo   (string text) => Append(text, Color.DeepSkyBlue);
+            public void WriteVerbose(string text) => Append(text, Color.MediumPurple);
+            public void WriteDebug  (string text) => Append(text, Color.LightSlateGray);
+
+            public void Log(string message)
+            {
+                // Match the main sink's "[HH:mm:ss] - <text>" prefix so
+                // log lines look identical regardless of which sink
+                // emits them.
+                Append($"[{DateTime.Now:HH:mm:ss}] - {message}{Environment.NewLine}", Color.Gainsboro);
+            }
+
+            public void SetColumns(IList<string> columns) { /* no grid here */ }
+            public void AppendRow(params object[] cells)  { /* no grid here */ }
+            public void ClearOutput() { /* never called -- editor controls clear via Run Test path */ }
+            public void ClearGrid()   { /* no grid here */ }
+
+            private void Append(string text, Color color)
+            {
+                if (string.IsNullOrEmpty(text)) return;
+                if (_rtb.IsDisposed) return;
+                if (_rtb.InvokeRequired)
+                {
+                    try { _rtb.BeginInvoke((Action)(() => Append(text, color))); }
+                    catch { /* form closing */ }
+                    return;
+                }
+                _rtb.SelectionStart = _rtb.TextLength;
+                _rtb.SelectionLength = 0;
+                _rtb.SelectionColor = color;
+                _rtb.AppendText(text);
+                _rtb.SelectionColor = _rtb.ForeColor;
+                _rtb.ScrollToCaret();
+            }
+        }
+    }
+}

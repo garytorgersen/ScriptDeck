@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "name": "Sample Workspace",
+  "sharedInputs": [
+    {
+      "id": "computerName",
+      "label": "Computer Name",
+      "type": "text",
+      "default": ".",
+      "normalize": "computerName"
+    }
+  ],
+  "menus": [
+    {
+      "title": "&Quick",
+      "items": [
+        {
+          "id": "menu-taskmgr",
+          "label": "Task Manager",
+          "executor": "process",
+          "scriptPath": "C:\\Windows\\System32\\taskmgr.exe",
+          "args": [],
+          "outputs": [],
+          "log": true
+        },
+        {
+          "id": "menu-notepad",
+          "label": "Notepad",
+          "executor": "process",
+          "scriptPath": "C:\\Windows\\System32\\notepad.exe",
+          "args": [],
+          "outputs": [],
+          "log": true
+        },
+        { "label": "-", "executor": "powershell" },
+        {
+          "id": "menu-ipconfig",
+          "label": "IP Configuration ({{computerName}})",
+          "executor": "powershell",
+          "scriptPath": "scripts\\Get-IpInfo.ps1",
+          "args": [ "-ComputerName", "{{computerName}}" ],
+          "outputs": [ "rtb", "grid" ],
+          "log": true
+        }
+      ]
+    }
+  ],
+  "tabs": [
+    {
+      "id": "diagnostics",
+      "title": "Diagnostics",
+      "groups": [
+        {
+          "id": "grp-network",
+          "title": "Network",
+          "x": 16, "y": 16, "width": 340, "height": 110
+        },
+        {
+          "id": "grp-system",
+          "title": "System",
+          "x": 16, "y": 140, "width": 340, "height": 110
+        }
+      ],
+      "buttons": [
+        {
+          "id": "btn-ipconfig",
+          "label": "IP Configuration",
+          "executor": "powershell",
+          "scriptPath": "scripts\\Get-IpInfo.ps1",
+          "args": [ "-ComputerName", "{{computerName}}" ],
+          "outputs": [ "rtb", "grid" ],
+          "log": true,
+          "groupId": "grp-network",
+          "x": 14, "y": 28, "width": 160, "height": 36
+        },
+        {
+          "id": "btn-systeminfo",
+          "label": "System Info",
+          "executor": "cmd",
+          "scriptPath": "scripts\\systeminfo.cmd",
+          "args": [ "{{computerName}}" ],
+          "outputs": [ "rtb" ],
+          "log": true,
+          "groupId": "grp-system",
+          "x": 14, "y": 28, "width": 160, "height": 36
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "title": "Tools",
+      "buttons": [
+        {
+          "id": "btn-notepad",
+          "label": "Notepad",
+          "executor": "process",
+          "scriptPath": "C:\\Windows\\System32\\notepad.exe",
+          "args": [],
+          "outputs": [],
+          "log": true,
+          "x": 16, "y": 16, "width": 150, "height": 36
+        },
+        {
+          "id": "btn-taskmgr",
+          "label": "Task Manager",
+          "executor": "process",
+          "scriptPath": "C:\\Windows\\System32\\taskmgr.exe",
+          "args": [],
+          "outputs": [],
+          "log": true,
+          "x": 178, "y": 16, "width": 150, "height": 36
+        }
+      ]
+    }
+  ]
+}

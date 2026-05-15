@@ -1,0 +1,87 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <IsPackable>false</IsPackable>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>ScriptDeck.Tests</RootNamespace>
+    <!-- Microsoft.Data.Sqlite 6.x transitively requires
+         System.Runtime.CompilerServices.Unsafe 6.0.0.0 but net48 ships
+         with 4.0.4.1; we need the SDK to auto-generate binding
+         redirects in the test .config so the load resolves. Without
+         this, every Sqlite init throws FileLoadException. -->
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+    <!-- Tests don't need WinForms; skipping UseWindowsForms keeps the
+         test project's AppDomain free of UI runtime quirks. The few
+         types from ScriptDeck that DO touch WinForms (OutputSink,
+         dialog code-behind) aren't covered here; they need a UI
+         harness to test meaningfully. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <!-- Direct PackageReference so the SQLitePCLRaw bundle assembly gets
+         loaded into the test AppDomain. Transitive references through
+         ProjectReference don't reliably trigger the runtime provider
+         initialization on net48; the user-facing symptom is
+         "TypeInitializationException: The type initializer for
+         'Microsoft.Data.Sqlite.SqliteConnection' threw an exception."
+         The version must match what ScriptDeck.csproj uses. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="6.0.36" />
+    <!-- Microsoft.Data.Sqlite 6.x wants System.Runtime.CompilerServices.Unsafe
+         6.0.0+ but net48's reference assemblies + NuGet's default
+         transitive resolution leave us with 4.0.4.1 in the bin
+         folder. Direct package reference forces the 6.0.0 DLL to be
+         copied. Without this, every Sqlite init throws FileLoadException. -->
+    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScriptDeck\ScriptDeck.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Copy the bootstrap into the test bin folder so PowerShellExecutor's
+         AppContext.BaseDirectory probe finds it. Without this the
+         integration tests would all surface the "bootstrap missing"
+         warning and Test-IsLocalTarget / Write-Rtb / Write-Grid would
+         be undefined inside test scripts. -->
+    <Content Include="..\ScriptDeck\ScriptDeck.Bootstrap.ps1">
+      <Link>ScriptDeck.Bootstrap.ps1</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- xUnit runner config. Disables shadow copy so SQLitePCLRaw can
+         find its native e_sqlite3.dll next to the test bin. Has to be
+         marked CopyToOutputDirectory so the runner picks it up. -->
+    <None Include="xunit.runner.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- On net48, Microsoft.Data.Sqlite 6.x places e_sqlite3.dll under
+       runtimes/win-x64/native/ in the bin folder, but the DllImport
+       resolver only checks the bin root. Production ScriptDeck.exe
+       sets PlatformTarget=x64 and pulls in the right MSBuild targets
+       to copy the native dll to the root, but the test runner host
+       (vstest) doesn't. Fix: explicit post-build copy. Without this,
+       any test that touches SQLite throws TypeInitializationException. -->
+  <Target Name="CopySqliteNativeToRoot" AfterTargets="Build">
+    <ItemGroup>
+      <SqliteNativeRoot Include="$(OutDir)runtimes\win-x64\native\e_sqlite3.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SqliteNativeRoot)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('@(SqliteNativeRoot)')" />
+  </Target>
+
+</Project>

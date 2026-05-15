@@ -1,0 +1,5 @@
+{
+  "$schema": "https://xunit.net/schema/current/xunit.runner.schema.json",
+  "_comment_shadowCopy": "Shadow copy moves the test DLL into a temp folder, but SQLitePCLRaw probes for e_sqlite3.dll native binary RELATIVE TO that shadow-copied location, where it doesn't exist. Disabling shadow copy keeps the native dll discoverable next to the test bin folder. Note: PowerShellExecutor also probes AppContext.BaseDirectory for ScriptDeck.Bootstrap.ps1, so we WANT AppDomain to stay enabled (default) so BaseDirectory points at the bin folder.",
+  "shadowCopy": false
+}
