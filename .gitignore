@@ -34,6 +34,13 @@ project.lock.json
 # of git per the project owner's choice.
 ORIGINAL_SOURCE/
 
+# ----- Installer build output -----
+# Build-Installer.ps1 produces dist/staging + dist/ScriptDeck-vN.N.N.zip.
+# The zip is large and reproducible from sources, so it lives outside
+# version control. Upload it manually to GitHub Releases when cutting
+# a new version.
+dist/
+
 # ----- Misc -----
 Thumbs.db
 *.swp
