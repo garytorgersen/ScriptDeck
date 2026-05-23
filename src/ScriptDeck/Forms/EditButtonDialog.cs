@@ -79,7 +79,6 @@ namespace ScriptDeck.Forms
 
             checkBox_Confirm.Checked = source.Confirm;
             checkBox_Log.Checked     = source.Log;
-            checkBox_ExtendedGrid.Checked = source.ExtendedGridData;
             checkBox_RunInBackground.Checked = source.RunInBackground;
 
             // RTB format: select the saved value if it matches an item;
@@ -119,14 +118,6 @@ namespace ScriptDeck.Forms
 
             target.Confirm = checkBox_Confirm.Checked;
             target.Log     = checkBox_Log.Checked;
-            // Only persist ExtendedGridData when it makes sense — it's
-            // PowerShell-only, and only meaningful when grid is a
-            // destination. Storing it in irrelevant cases would confuse
-            // the JSON readability and round-tripping through the editor.
-            bool psAndGrid =
-                string.Equals(target.Executor, "powershell", StringComparison.OrdinalIgnoreCase)
-                && (target.Outputs?.Any(o => string.Equals(o, "grid", StringComparison.OrdinalIgnoreCase)) ?? false);
-            target.ExtendedGridData = psAndGrid && checkBox_ExtendedGrid.Checked;
             target.RunInBackground = checkBox_RunInBackground.Checked;
 
             // RTB format: persist null when "default" is selected so the
@@ -144,18 +135,6 @@ namespace ScriptDeck.Forms
             {
                 target.RtbFormat = null;
             }
-        }
-
-        // Toggle the extended-grid checkbox's enabled state based on the
-        // currently selected executor and whether grid is a destination.
-        // Wired from InitializeComponent so the dialog stays reactive as
-        // the user changes either field.
-        private void OnExecutorOrGridToggleChanged(object sender, EventArgs e)
-        {
-            bool isPowershell = string.Equals(
-                comboBox_Executor.Text?.Trim(), "powershell", StringComparison.OrdinalIgnoreCase);
-            bool gridChecked = checkBox_OutputGrid.Checked;
-            checkBox_ExtendedGrid.Enabled = isPowershell && gridChecked;
         }
 
         // ---- UI handlers ----

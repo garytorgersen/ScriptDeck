@@ -75,6 +75,20 @@ namespace ScriptDeck.Forms
         private Workspace.Workspace _activeWorkspace;
         private string _activeWorkspacePath;
 
+        // Session-scoped shared inputs (Volatile). Created at runtime by
+        // either scripts (via Set-SharedInput) or the user (Inputs grid
+        // -> Add Volatile Input). Never persisted; cleared on workspace
+        // open / close / switch. Merged on top of the workspace's
+        // Static inputs at dispatch time; the duplicate-prevention rules
+        // mean a given id is only ever in ONE of the two sources.
+        private readonly Dictionary<string, SessionInput> _sessionInputs =
+            new Dictionary<string, SessionInput>(StringComparer.OrdinalIgnoreCase);
+        // Fires after _sessionInputs changes (Add / Update / Remove /
+        // Clear). The Inputs grid UI subscribes to refresh. Marshalled
+        // to the UI thread by the raiser since some triggers (script
+        // emissions) come in on background threads.
+        private event Action SessionInputsChanged;
+
         public Shell()
         {
             InitializeComponent();
@@ -134,6 +148,15 @@ namespace ScriptDeck.Forms
             var psBg  = new PowerShellExecutor();
             var cmd   = new CmdExecutor();
             var proc  = new ProcessExecutor();
+            // Both PS executors push session-input mutations through the
+            // Shell's session dict. A script run in foreground OR in a
+            // background job can equally call Set-SharedInput; either
+            // path lands in the same Shell-side state. Subscribers
+            // marshal to the UI thread internally.
+            psFg.SharedInputSetRequested    += OnSessionInputSetRequested;
+            psFg.SharedInputRemoveRequested += OnSessionInputRemoveRequested;
+            psBg.SharedInputSetRequested    += OnSessionInputSetRequested;
+            psBg.SharedInputRemoveRequested += OnSessionInputRemoveRequested;
             _dispatcher = new Dispatcher(
                 Sink,
                 executors:           new IExecutor[] { psFg, cmd, proc },
@@ -172,6 +195,22 @@ namespace ScriptDeck.Forms
             // Drag/resize commits land directly on the model; the renderer
             // is the only mutator the Shell doesn't see, so it tells us.
             _renderer.LayoutCommitted += MarkDirty;
+
+            // Inputs grid (bottom-right). Owns no state; the Shell pushes
+            // a full snapshot whenever something changes (workspace load,
+            // session-input mutation, etc.). All user gestures surface
+            // as events the Shell turns into model mutations.
+            inputsGridPanel.AddStaticRequested    += OnInputsGrid_AddStatic;
+            inputsGridPanel.AddVolatileRequested  += OnInputsGrid_AddVolatile;
+            inputsGridPanel.RemoveRequested       += OnInputsGrid_Remove;
+            inputsGridPanel.ClearVolatileRequested += OnInputsGrid_ClearVolatile;
+            inputsGridPanel.VolatileValueEdited   += OnInputsGrid_VolatileValueEdited;
+            // Re-render the grid whenever the session-input dict changes
+            // -- Set / Remove / Clear all flow through this event.
+            SessionInputsChanged += RefreshInputsGrid;
+            // Initial render: empty workspace, no volatiles. Just paints
+            // the grid header so the UI doesn't look broken at launch.
+            RefreshInputsGrid();
 
             Sink.Log("ScriptDeck started.");
             Sink.WriteInfo("Welcome to ScriptDeck." + Environment.NewLine);
@@ -310,6 +349,10 @@ namespace ScriptDeck.Forms
                 _activeWorkspace.SharedInputs = dlg.GetEditedList();
                 _renderer.Render(_activeWorkspace);
                 MarkDirty();
+                // Mirror static changes into the inputs grid -- otherwise
+                // the grid still shows the pre-edit Static row set until
+                // the next session-input mutation.
+                RefreshInputsGrid();
                 Sink.Log($"Updated shared inputs ({_activeWorkspace.SharedInputs.Count}).");
             }
         }
@@ -319,6 +362,243 @@ namespace ScriptDeck.Forms
             if (_dispatcher == null || !_dispatcher.IsBusy) return;
             Sink.Log($"Cancel requested for: {_dispatcher.ActiveLabel}");
             _dispatcher.CancelActive();
+        }
+
+        // ===================================================================
+        // Session inputs (Volatile)
+        // ===================================================================
+
+        // Called by PowerShellExecutor when a script invokes
+        // Set-SharedInput. Runs on the executor's background thread --
+        // marshal to the UI thread before mutating the dict so observers
+        // (e.g. the Inputs grid) can refresh without InvokeRequired
+        // checks of their own.
+        private void OnSessionInputSetRequested(string id, string value, string label)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke((Action<string, string, string>)OnSessionInputSetRequested, id, value, label);
+                return;
+            }
+            if (string.IsNullOrEmpty(id)) return;
+
+            // No-duplicate rule: refuse a session input that shadows a
+            // static workspace input. The bootstrap helper itself
+            // performs a client-side check using $ScriptDeckInputs, so
+            // a well-behaved script never hits this path. Belt-and-
+            // suspenders for ad-hoc / pre-existing scripts that don't
+            // know about the helper's check.
+            if (_activeWorkspace?.SharedInputs != null
+                && _activeWorkspace.SharedInputs.Any(s =>
+                    string.Equals(s?.Id, id, StringComparison.OrdinalIgnoreCase)))
+            {
+                Sink?.WriteWarning(
+                    $"Refused to set session input '{id}': a Static workspace input with that id exists.{Environment.NewLine}");
+                return;
+            }
+
+            _sessionInputs[id] = new SessionInput
+            {
+                Id = id,
+                Value = value ?? string.Empty,
+                Label = label,
+            };
+            SessionInputsChanged?.Invoke();
+        }
+
+        private void OnSessionInputRemoveRequested(string id)
+        {
+            if (InvokeRequired) { BeginInvoke((Action<string>)OnSessionInputRemoveRequested, id); return; }
+            if (string.IsNullOrEmpty(id)) return;
+            if (_sessionInputs.Remove(id))
+            {
+                SessionInputsChanged?.Invoke();
+            }
+            // No error if id wasn't in the volatile set -- bootstrap
+            // helper's contract is "silent no-op for non-existent".
+            // Static ids never get here because the bootstrap helper
+            // refuses to emit a remove tag for them.
+        }
+
+        // Clear all volatile inputs. Called by lifecycle hooks (workspace
+        // open / close / switch) and the user's grid action "Clear All
+        // Volatile". Idempotent.
+        private void ClearSessionInputs()
+        {
+            if (_sessionInputs.Count == 0) return;
+            _sessionInputs.Clear();
+            SessionInputsChanged?.Invoke();
+        }
+
+        // ---- Inputs grid (bottom-right) ----
+
+        // Rebuild the grid from current workspace + session state. Cheap
+        // (a few dozen rows worst case), so we re-issue a full LoadData
+        // rather than diffing -- avoids drift between the visible rows
+        // and the underlying model.
+        private void RefreshInputsGrid()
+        {
+            if (inputsGridPanel == null) return;
+            var rows = new List<InputsGridPanel.InputRow>();
+
+            // Static rows: the workspace-defined inputs. We surface the
+            // CURRENT runtime textbox value (not the Default) so the grid
+            // doesn't lie when the user has typed something into the top
+            // bar. The renderer is the source of truth for runtime values.
+            if (_activeWorkspace?.SharedInputs != null)
+            {
+                IDictionary<string, string> liveValues = null;
+                try { liveValues = _renderer?.GetSharedInputValues(); }
+                catch { liveValues = null; }  // renderer may not be initialized yet on first paint
+
+                foreach (var si in _activeWorkspace.SharedInputs)
+                {
+                    if (si == null || string.IsNullOrEmpty(si.Id)) continue;
+                    string value = null;
+                    if (liveValues != null && liveValues.TryGetValue(si.Id, out var v)) value = v;
+                    if (value == null) value = si.Default ?? string.Empty;
+                    rows.Add(new InputsGridPanel.InputRow
+                    {
+                        Id = si.Id,
+                        Value = value,
+                        Scope = InputsGridPanel.ScopeStatic,
+                    });
+                }
+            }
+
+            // Volatile rows: session-only. The no-duplicate rule means
+            // these ids are guaranteed not to clash with the Static set
+            // above, but a belt-and-suspenders skip is still cheap.
+            var staticIds = new HashSet<string>(
+                rows.Select(r => r.Id), StringComparer.OrdinalIgnoreCase);
+            foreach (var v in _sessionInputs.Values)
+            {
+                if (v == null || string.IsNullOrEmpty(v.Id)) continue;
+                if (staticIds.Contains(v.Id)) continue;
+                rows.Add(new InputsGridPanel.InputRow
+                {
+                    Id = v.Id,
+                    Value = v.Value ?? string.Empty,
+                    Scope = InputsGridPanel.ScopeVolatile,
+                });
+            }
+
+            inputsGridPanel.LoadData(rows);
+        }
+
+        // Build the existing-id set passed to AddInputDialog so it can
+        // refuse a duplicate name. Union of Static + Volatile -- the
+        // no-duplicate rule cuts across both scopes.
+        private ISet<string> CollectAllInputIds()
+        {
+            var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (_activeWorkspace?.SharedInputs != null)
+            {
+                foreach (var si in _activeWorkspace.SharedInputs)
+                    if (si != null && !string.IsNullOrEmpty(si.Id)) ids.Add(si.Id);
+            }
+            foreach (var v in _sessionInputs.Values)
+                if (v != null && !string.IsNullOrEmpty(v.Id)) ids.Add(v.Id);
+            return ids;
+        }
+
+        private void OnInputsGrid_AddStatic(object sender, EventArgs e)
+        {
+            // Static inputs live in the workspace JSON, so we need a
+            // loaded workspace to attach to. Without one, refuse with a
+            // visible hint rather than silently doing nothing.
+            if (_activeWorkspace == null)
+            {
+                MessageBox.Show(this,
+                    "Open a workspace first. Static inputs are stored in the workspace file.",
+                    "No workspace loaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            using (var dlg = new AddInputDialog(InputsGridPanel.ScopeStatic, CollectAllInputIds()))
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+                _activeWorkspace.SharedInputs.Add(new SharedInput
+                {
+                    Id = dlg.EnteredName,
+                    Label = dlg.EnteredLabel ?? dlg.EnteredName,
+                    Type = "text",
+                    Default = dlg.EnteredValue ?? string.Empty,
+                });
+                MarkDirty();
+                // Re-render the top input band so the new textbox appears
+                // immediately; then refresh the grid to mirror.
+                try { _renderer?.Render(_activeWorkspace); }
+                catch (Exception ex)
+                {
+                    Sink.WriteError($"Render failed after adding input: {ex.Message}{Environment.NewLine}");
+                }
+                RefreshInputsGrid();
+            }
+        }
+
+        private void OnInputsGrid_AddVolatile(object sender, EventArgs e)
+        {
+            // Volatile inputs are session-only -- no workspace gating.
+            using (var dlg = new AddInputDialog(InputsGridPanel.ScopeVolatile, CollectAllInputIds()))
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                _sessionInputs[dlg.EnteredName] = new SessionInput
+                {
+                    Id = dlg.EnteredName,
+                    Value = dlg.EnteredValue ?? string.Empty,
+                    Label = dlg.EnteredLabel,
+                };
+                SessionInputsChanged?.Invoke();
+            }
+        }
+
+        private void OnInputsGrid_Remove(object sender, string id)
+        {
+            // The grid's context menu disables Remove on Static rows, so
+            // this only fires for Volatile. Defense in depth: confirm
+            // before mutating the dict.
+            if (string.IsNullOrEmpty(id)) return;
+            if (_sessionInputs.Remove(id))
+            {
+                SessionInputsChanged?.Invoke();
+            }
+        }
+
+        private void OnInputsGrid_ClearVolatile(object sender, EventArgs e)
+        {
+            if (_sessionInputs.Count == 0) return;
+            var answer = MessageBox.Show(this,
+                $"Remove all {_sessionInputs.Count} session (Volatile) input(s)? Static workspace inputs are unaffected.",
+                "Clear Volatile Inputs", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+            if (answer != DialogResult.OK) return;
+            ClearSessionInputs();
+        }
+
+        private void OnInputsGrid_VolatileValueEdited(object sender,
+            InputsGridPanel.VolatileValueEditedEventArgs e)
+        {
+            if (e == null || string.IsNullOrEmpty(e.Id)) return;
+            if (!_sessionInputs.TryGetValue(e.Id, out var existing))
+            {
+                // Edit hit a row we no longer have (shouldn't happen
+                // unless the grid is stale). Promote to an Add rather
+                // than silently dropping the user's change.
+                _sessionInputs[e.Id] = new SessionInput
+                {
+                    Id = e.Id,
+                    Value = e.Value ?? string.Empty,
+                    Label = null,
+                };
+            }
+            else
+            {
+                existing.Value = e.Value ?? string.Empty;
+            }
+            // Do NOT fire SessionInputsChanged here -- the edit came
+            // FROM the grid, and re-pushing LoadData mid-commit risks
+            // disposing the active editor. Other observers (none today)
+            // would need their own hook if this list grows.
         }
 
         // ===================================================================
@@ -853,6 +1133,12 @@ namespace ScriptDeck.Forms
             }
             _previousWorkspaceLoaded = true;
 
+            // Volatile session inputs are scoped to a single workspace.
+            // Loading a new workspace must NOT carry $authToken etc.
+            // from the previous one -- those would silently shadow new
+            // workspace inputs with stale values.
+            ClearSessionInputs();
+
             _activeWorkspace = ws;
             _activeWorkspacePath = path;
             try
@@ -866,6 +1152,9 @@ namespace ScriptDeck.Forms
                 _activeWorkspace = null;
                 _activeWorkspacePath = null;
                 ClearWorkspaceMenus();
+                // Static rows referenced a workspace that no longer exists --
+                // drop them now or the grid will keep showing stale rows.
+                RefreshInputsGrid();
                 UpdateStatusBar();
                 return;
             }
@@ -891,6 +1180,12 @@ namespace ScriptDeck.Forms
             ClearDirty();
 
             UpdateStatusBar();
+            // ClearSessionInputs already fired SessionInputsChanged which
+            // refreshed the grid -- but at that point _activeWorkspace was
+            // still the OLD workspace (the swap happens after Clear). Do
+            // an explicit refresh here so the grid now shows the NEW
+            // workspace's Static rows.
+            RefreshInputsGrid();
             Sink.Log($"Loaded workspace: {ws.Name} ({path})");
             Sink.WriteInfo(
                 $"Workspace '{ws.Name}' loaded. " +
@@ -1205,6 +1500,57 @@ namespace ScriptDeck.Forms
             return new System.Drawing.Point(padX, padY + 64 * cellH);
         }
 
+        // Group-interior version of FindFreeSpot. Coordinates are
+        // GroupBox-interior-relative: (0, 0) is the top-left INSIDE
+        // the frame, just under the title. (14, 28) is the historical
+        // "first button" slot; subsequent columns step right by cellW,
+        // then we wrap to the next row.
+        //
+        // Considers only buttons whose GroupId matches this group --
+        // canvas-direct siblings live in a different coordinate space
+        // and can't collide here.
+        //
+        // Falls back to (14, 28) if the search is exhausted. WinForms
+        // adds new children to the BACK of z-order (highest index =
+        // bottom of the visual stack), so a duplicate-position button
+        // would be invisible behind its older siblings. Returning a
+        // distinct slot is the actual fix; the fallback only triggers
+        // if 64 rows are full, at which point an overlap is acceptable.
+        private static System.Drawing.Point FindFreeSpotInGroup(
+            Tab tab, ButtonGroup group, int w, int h)
+        {
+            const int padX = 14, padY = 28, cellW = 162, cellH = 44, cols = 4;
+            var occupied = new List<System.Drawing.Rectangle>();
+            if (tab?.Buttons != null && group != null)
+            {
+                foreach (var b in tab.Buttons)
+                {
+                    if (b == null) continue;
+                    if (!string.Equals(b.GroupId, group.Id, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    int bw = b.Width  > 0 ? b.Width  : 150;
+                    int bh = b.Height > 0 ? b.Height : 36;
+                    occupied.Add(new System.Drawing.Rectangle(b.X, b.Y, bw, bh));
+                }
+            }
+            for (int row = 0; row < 64; row++)
+            {
+                for (int col = 0; col < cols; col++)
+                {
+                    int x = padX + col * cellW;
+                    int y = padY + row * cellH;
+                    var candidate = new System.Drawing.Rectangle(x, y, w, h);
+                    bool clash = false;
+                    foreach (var occ in occupied)
+                    {
+                        if (occ.IntersectsWith(candidate)) { clash = true; break; }
+                    }
+                    if (!clash) return new System.Drawing.Point(x, y);
+                }
+            }
+            return new System.Drawing.Point(padX, padY);
+        }
+
         private void OnEditTab(Tab tab)
         {
             if (tab == null || _activeWorkspace == null) return;
@@ -1287,9 +1633,13 @@ namespace ScriptDeck.Forms
 
             // Same defaults as OnAddButton, plus GroupId so the new
             // button parents into the frame on render. X/Y are
-            // group-relative — (14, 28) lands the button just below
-            // the group's title bar at the left edge of its interior,
-            // which is where the user clicked / right-clicked.
+            // group-relative — FindFreeSpotInGroup picks a slot that
+            // doesn't collide with buttons already in this frame.
+            // (Hardcoding (14, 28) used to bury every new button
+            // behind the existing stack: WinForms z-orders later-added
+            // siblings to the BACK, so a fresh button at an occupied
+            // position was rendered but invisible.)
+            var spotG = FindFreeSpotInGroup(tab, group, 150, 36);
             var fresh = new WsButton
             {
                 Id = string.Empty,
@@ -1302,8 +1652,8 @@ namespace ScriptDeck.Forms
                 Width = 150,
                 Height = 36,
                 GroupId = group.Id,
-                X = 14,
-                Y = 28,
+                X = spotG.X,
+                Y = spotG.Y,
             };
 
             using (var dlg = new EditButtonDialog(fresh, _activeWorkspace.ScriptsRoot, _dispatcher, BuildSharedInputSnapshot()))
@@ -1585,9 +1935,23 @@ namespace ScriptDeck.Forms
             // so "{{computerName}}" and the injected $computerName variable
             // see the SAME resolved value (e.g. "MYBOX" instead of "" or
             // ".") — anything else would be confusing.
-            var values = NormalizeSharedInputs(
+            var staticValues = NormalizeSharedInputs(
                 _renderer.GetSharedInputValues(),
                 _activeWorkspace?.SharedInputs);
+            // Merge volatile session inputs ON TOP of the static set.
+            // The no-duplicate rule means they shouldn't actually clash
+            // (Set-SharedInput refuses to shadow a static id), but if a
+            // collision somehow happens, volatile wins -- per the
+            // documented semantics. staticIds tracks the pre-merge keys
+            // so the executor can publish $ScriptDeckInputs.Static for
+            // bootstrap helpers.
+            var staticIds = new HashSet<string>(staticValues.Keys, StringComparer.OrdinalIgnoreCase);
+            var values = new Dictionary<string, string>(staticValues, StringComparer.OrdinalIgnoreCase);
+            foreach (var v in _sessionInputs.Values)
+            {
+                if (v == null || string.IsNullOrEmpty(v.Id)) continue;
+                values[v.Id] = v.Value ?? string.Empty;
+            }
             var resolved = TokenResolver.Resolve(btn.Args, btn.WorkingDirectory, values);
 
             foreach (var w in resolved.Warnings)
@@ -1629,7 +1993,6 @@ namespace ScriptDeck.Forms
                 WorkingDirectory = workingDir,
                 ButtonLabel = btn.Label,
                 OutputTargets = outputs,
-                ExtendedGridData = btn.ExtendedGridData,
                 // Phase 6 history metadata. None of these affect execution —
                 // they ride along so the dispatcher can record an audit row
                 // without us plumbing a parallel "context" object through
@@ -1642,6 +2005,11 @@ namespace ScriptDeck.Forms
                 // (so a script can use $computerName directly) and Cmd /
                 // Process executors publish them as env vars.
                 SharedInputs = values,
+                // The pre-merge static ids tell PowerShellExecutor which
+                // entries are Static vs Volatile so it can publish a
+                // $ScriptDeckInputs metadata hashtable for the bootstrap
+                // helpers' duplicate detection.
+                StaticInputIds = staticIds,
                 RtbFormat    = btn.RtbFormat,
             };
         }

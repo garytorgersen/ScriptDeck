@@ -78,7 +78,6 @@ namespace ScriptDeck.Forms
                 Outputs          = b.Outputs != null ? new List<string>(b.Outputs) : new List<string> { "rtb" },
                 Confirm          = b.Confirm,
                 Log              = b.Log,
-                ExtendedGridData = b.ExtendedGridData,
             };
         }
 

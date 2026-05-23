@@ -49,6 +49,17 @@ namespace ScriptDeck.Hosting
 
         public string Kind => "powershell";
 
+        // Events fired when a script invokes the Set-SharedInput /
+        // Remove-SharedInput bootstrap helpers. The helpers emit
+        // PSObjects with magic __ScriptDeck* properties; the DataAdded
+        // handler intercepts those and routes here instead of letting
+        // them flow into the normal output streams. Shell subscribes
+        // to these to mutate its session-input dictionary. Handlers
+        // run on the executor's background thread; subscribers must
+        // marshal to the UI thread themselves.
+        public event Action<string, string, string> SharedInputSetRequested;
+        public event Action<string> SharedInputRemoveRequested;
+
         public PowerShellExecutor()
         {
             OpenFreshRunspace();
@@ -215,6 +226,12 @@ namespace ScriptDeck.Hosting
             // single warning to the sink — better to log once and keep
             // running than to fail every dispatch on a misnamed input.
             ApplySharedInputVariables(req.SharedInputs, sink);
+            // Publish the static/volatile metadata so bootstrap helpers
+            // (Set-SharedInput / Remove-SharedInput) can do client-side
+            // duplicate detection without round-tripping to Shell. The
+            // hashtable is rebuilt every dispatch -- it reflects the
+            // CURRENT inputs, not a frozen snapshot.
+            PublishScriptDeckInputsMetadata(req.SharedInputs, req.StaticInputIds);
 
             var ps = PowerShell.Create();
             ps.Runspace = _runspace;
@@ -261,7 +278,6 @@ namespace ScriptDeck.Hosting
 
             bool wantRtb  = req.OutputTargets != null && req.OutputTargets.Contains("rtb");
             bool wantGrid = req.OutputTargets != null && req.OutputTargets.Contains("grid");
-            bool extended = req.ExtendedGridData;
 
             // RTB rendering format. "default" / "list" stream as records
             // arrive; "table" / "json" / "csv" buffer until the script
@@ -274,26 +290,30 @@ namespace ScriptDeck.Hosting
             var rtbBuffer = bufferRtb ? new List<PSObject>(capacity: 64) : null;
             bool rtbTruncated = false;
 
-            // Output stream gets special handling: structured records may
-            // populate the grid, primitives go to RTB by default. With
-            // ExtendedGridData on, primitives ALSO land in the grid as a
-            // single-"Value"-column row — useful for scripts that emit
-            // a stream of strings/ints the user wants to scan in tabular
-            // form rather than free-flowing text.
+            // Output stream gets special handling: structured records
+            // populate the grid; primitives go to RTB only. (There used
+            // to be an "Extended Grid Data" toggle that also fed
+            // primitives into a single-"Value" grid column AND retained
+            // PS* engine metadata as columns -- removed in favor of the
+            // cleaner default behavior, since the toggle couldn't actually
+            // expand properties past a script-side Select-Object. Scripts
+            // that want full-property grid output should emit unprojected
+            // objects via Write-Grid and route the curated view to the
+            // RTB via Write-Rtb.)
             var output = new PSDataCollection<PSObject>();
             bool gridColumnsSet = false;
-            // The first emitted record decides the grid's shape. Mixing
-            // structured + primitive in extended mode means we may have
-            // already pinned a row of object-properties and a later
-            // primitive can't fit. We just write the primitive to
-            // SinglePrimitiveValue's column if we pre-pinned to ["Value"];
-            // for the structured-first case, primitives skip the grid.
-            bool gridIsValueOnly = false;
 
             output.DataAdded += (_, ev) =>
             {
                 var obj = output[ev.Index];
                 if (obj == null) return;
+
+                // Session-input mutation tags (set by Set-SharedInput /
+                // Remove-SharedInput bootstrap helpers). These NEVER
+                // render -- we intercept, fire the event, and return.
+                // Tagged objects don't reach the RTB, the grid, or any
+                // format helper.
+                if (TryHandleSharedInputTag(obj)) return;
 
                 bool isStructured = IsStructured(obj);
 
@@ -309,37 +329,17 @@ namespace ScriptDeck.Hosting
 
                 if (sendToGrid && isStructured)
                 {
-                    // Extended mode: include EVERY property (PS-prefixed
-                    // engine metadata, ETS-added members, all of it),
-                    // but always strip the `__`-prefixed routing tags
-                    // we use internally for Write-Rtb / Write-Grid -
-                    // those are plumbing, not data.
-                    // Default mode keeps the curated user-property view.
-                    var props = extended
-                        ? obj.Properties.Where(p => !p.Name.StartsWith("__", StringComparison.Ordinal)).ToList()
-                        : GetUserProperties(obj);
+                    // Curated user-property view: PS* engine metadata and
+                    // __* routing tags filtered out. This is the only
+                    // grid-render path now.
+                    var props = GetUserProperties(obj);
                     if (!gridColumnsSet && props.Count > 0)
                     {
                         sink.SetColumns(props.Select(p => p.Name).ToList());
                         gridColumnsSet = true;
-                        gridIsValueOnly = false;
                     }
-                    if (gridColumnsSet && !gridIsValueOnly)
+                    if (gridColumnsSet)
                         sink.AppendRow(props.Select(p => SafeReadProperty(p)).ToArray());
-                }
-                else if (sendToGrid && extended && !isStructured)
-                {
-                    // Primitive in extended mode → single-column "Value"
-                    // row. Pin the column shape on the first such record
-                    // so subsequent primitives line up underneath.
-                    if (!gridColumnsSet)
-                    {
-                        sink.SetColumns(new List<string> { "Value" });
-                        gridColumnsSet = true;
-                        gridIsValueOnly = true;
-                    }
-                    if (gridIsValueOnly)
-                        sink.AppendRow(new object[] { obj.BaseObject?.ToString() ?? string.Empty });
                 }
 
                 if (!sendToRtb) return;
@@ -526,6 +526,53 @@ namespace ScriptDeck.Hosting
             }
         }
 
+        // Inject a global $ScriptDeckInputs hashtable into the runspace
+        // so bootstrap helpers can answer "is this id Static?" without
+        // round-tripping to Shell. Shape:
+        //   @{
+        //       Static   = @('computerName', 'companyName')
+        //       Volatile = @('authToken')
+        //   }
+        // Rebuilt each dispatch. Static = ids that came from workspace JSON;
+        // Volatile = everything else (script-set + user-added at runtime).
+        // Caller must have already populated $proxy with the variable
+        // values themselves -- this only adds the metadata index.
+        private void PublishScriptDeckInputsMetadata(
+            System.Collections.Generic.IDictionary<string, string> allInputs,
+            System.Collections.Generic.ISet<string> staticIds)
+        {
+            try
+            {
+                var staticList   = new System.Collections.ArrayList();
+                var volatileList = new System.Collections.ArrayList();
+                if (allInputs != null)
+                {
+                    foreach (var id in allInputs.Keys)
+                    {
+                        if (string.IsNullOrEmpty(id)) continue;
+                        if (staticIds != null && staticIds.Contains(id))
+                            staticList.Add(id);
+                        else
+                            volatileList.Add(id);
+                    }
+                }
+                var meta = new System.Collections.Hashtable(
+                    System.StringComparer.OrdinalIgnoreCase)
+                {
+                    { "Static",   staticList.ToArray() },
+                    { "Volatile", volatileList.ToArray() },
+                };
+                _runspace.SessionStateProxy.SetVariable("ScriptDeckInputs", meta);
+            }
+            catch
+            {
+                // Metadata is a convenience -- if we can't publish it,
+                // the bootstrap helpers fall back to "tag and let Shell
+                // sort it out" semantics (a Set on a Static id still
+                // gets rejected, just with a less direct error).
+            }
+        }
+
         private void WarnOnce(IOutputSink sink, string key, string message)
         {
             lock (_gate)
@@ -534,6 +581,55 @@ namespace ScriptDeck.Hosting
             }
             try { sink.WriteWarning(message + Environment.NewLine); }
             catch { /* sink errors aren't worth crashing on */ }
+        }
+
+        // Check if `obj` is a tagged session-input mutation. If yes,
+        // dispatch the event and return true (caller should skip all
+        // other rendering). Returns false for plain output objects.
+        //
+        // The contract with the bootstrap helpers:
+        //   Set-SharedInput emits:
+        //     PSObject { __ScriptDeckSetSharedInput=$true; Id=...; Value=...; Label=... }
+        //   Remove-SharedInput emits:
+        //     PSObject { __ScriptDeckRemoveSharedInput=$true; Id=... }
+        // The booleans are sentinels so an unrelated PSCustomObject that
+        // happens to have an Id property doesn't get misrouted.
+        private bool TryHandleSharedInputTag(System.Management.Automation.PSObject obj)
+        {
+            try
+            {
+                var setSentinel = obj.Properties["__ScriptDeckSetSharedInput"]?.Value;
+                if (setSentinel is bool b && b)
+                {
+                    string id    = obj.Properties["Id"]?.Value as string;
+                    string value = obj.Properties["Value"]?.Value?.ToString();
+                    string label = obj.Properties["Label"]?.Value as string;
+                    if (!string.IsNullOrEmpty(id))
+                    {
+                        try { SharedInputSetRequested?.Invoke(id, value ?? string.Empty, label); }
+                        catch { /* listener exceptions don't escape the executor */ }
+                    }
+                    return true;
+                }
+
+                var removeSentinel = obj.Properties["__ScriptDeckRemoveSharedInput"]?.Value;
+                if (removeSentinel is bool rb && rb)
+                {
+                    string id = obj.Properties["Id"]?.Value as string;
+                    if (!string.IsNullOrEmpty(id))
+                    {
+                        try { SharedInputRemoveRequested?.Invoke(id); }
+                        catch { /* listener exceptions don't escape the executor */ }
+                    }
+                    return true;
+                }
+            }
+            catch
+            {
+                // A misshapen tagged object shouldn't break the pipeline.
+                // Fall through and let normal output handling deal with it.
+            }
+            return false;
         }
 
         // ---- helpers ----

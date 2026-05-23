@@ -1,114 +1,297 @@
-{
-  "version": 1,
-  "name": "Sample Workspace",
-  "sharedInputs": [
+﻿{
+  "Version": 1,
+  "Name": "Sample Workspace",
+  "ScriptsRoot": "C:\\Users\\gtorgersen\\Desktop\\Clause Testing\\BatchInterfaceCustomize\\src\\ScriptDeck\\Workspaces",
+  "SharedInputs": [
     {
-      "id": "computerName",
-      "label": "Computer Name",
-      "type": "text",
-      "default": ".",
-      "normalize": "computerName"
+      "Id": "computerName",
+      "Label": "Computer Name",
+      "Type": "text",
+      "Default": ".",
+      "Normalize": null
     }
   ],
-  "menus": [
+  "Tabs": [
     {
-      "title": "&Quick",
-      "items": [
+      "Id": "diagnostics",
+      "Title": "Diagnostics",
+      "Buttons": [
         {
-          "id": "menu-taskmgr",
-          "label": "Task Manager",
-          "executor": "process",
-          "scriptPath": "C:\\Windows\\System32\\taskmgr.exe",
-          "args": [],
-          "outputs": [],
-          "log": true
+          "Id": "btn-ipconfig",
+          "Label": "IP Configuration",
+          "Executor": "powershell",
+          "ScriptPath": "scripts\\Get-IpInfo.ps1",
+          "Args": [
+            "-ComputerName",
+            "{{computerName}}"
+          ],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "rtb",
+            "grid"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": "list",
+          "RunInBackground": false,
+          "X": 14,
+          "Y": 28,
+          "Width": 160,
+          "Height": 36,
+          "GroupId": "grp-network"
         },
         {
-          "id": "menu-notepad",
-          "label": "Notepad",
-          "executor": "process",
-          "scriptPath": "C:\\Windows\\System32\\notepad.exe",
-          "args": [],
-          "outputs": [],
-          "log": true
-        },
-        { "label": "-", "executor": "powershell" },
-        {
-          "id": "menu-ipconfig",
-          "label": "IP Configuration ({{computerName}})",
-          "executor": "powershell",
-          "scriptPath": "scripts\\Get-IpInfo.ps1",
-          "args": [ "-ComputerName", "{{computerName}}" ],
-          "outputs": [ "rtb", "grid" ],
-          "log": true
-        }
-      ]
-    }
-  ],
-  "tabs": [
-    {
-      "id": "diagnostics",
-      "title": "Diagnostics",
-      "groups": [
-        {
-          "id": "grp-network",
-          "title": "Network",
-          "x": 16, "y": 16, "width": 340, "height": 110
+          "Id": "btn-systeminfo",
+          "Label": "System Info",
+          "Executor": "cmd",
+          "ScriptPath": "scripts\\systeminfo.cmd",
+          "Args": [
+            "{{computerName}}"
+          ],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "rtb",
+            "rtb"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": null,
+          "RunInBackground": false,
+          "X": 14,
+          "Y": 28,
+          "Width": 160,
+          "Height": 36,
+          "GroupId": "grp-system"
         },
         {
-          "id": "grp-system",
-          "title": "System",
-          "x": 16, "y": 140, "width": 340, "height": 110
+          "Id": "GetWirelessPasswords",
+          "Label": "Wireless Passwords",
+          "Executor": "powershell",
+          "ScriptPath": "scripts\\Get-WirelessPassword.ps1",
+          "Args": [],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "rtb",
+            "grid"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": "list",
+          "RunInBackground": false,
+          "X": 14,
+          "Y": 28,
+          "Width": 150,
+          "Height": 36,
+          "GroupId": "grp-network"
+        },
+        {
+          "Id": "wirelesspasswords",
+          "Label": "WiFi Passwords",
+          "Executor": "powershell",
+          "ScriptPath": "scripts\\Get-WirelessPassword.ps1",
+          "Args": [],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "rtb",
+            "grid"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": "table",
+          "RunInBackground": false,
+          "X": 14,
+          "Y": 28,
+          "Width": 150,
+          "Height": 36,
+          "GroupId": "grp-network"
+        },
+        {
+          "Id": "GetWirelessPasswords",
+          "Label": "Wireless Passwords",
+          "Executor": "powershell",
+          "ScriptPath": "scripts\\Get-WirelessPassword.ps1",
+          "Args": [],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "grid"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": null,
+          "RunInBackground": false,
+          "X": 176,
+          "Y": 28,
+          "Width": 150,
+          "Height": 36,
+          "GroupId": "grp-network"
         }
       ],
-      "buttons": [
+      "Groups": [
         {
-          "id": "btn-ipconfig",
-          "label": "IP Configuration",
-          "executor": "powershell",
-          "scriptPath": "scripts\\Get-IpInfo.ps1",
-          "args": [ "-ComputerName", "{{computerName}}" ],
-          "outputs": [ "rtb", "grid" ],
-          "log": true,
-          "groupId": "grp-network",
-          "x": 14, "y": 28, "width": 160, "height": 36
+          "Id": "grp-network",
+          "Title": "Network",
+          "X": 16,
+          "Y": 16,
+          "Width": 689,
+          "Height": 101
         },
         {
-          "id": "btn-systeminfo",
-          "label": "System Info",
-          "executor": "cmd",
-          "scriptPath": "scripts\\systeminfo.cmd",
-          "args": [ "{{computerName}}" ],
-          "outputs": [ "rtb" ],
-          "log": true,
-          "groupId": "grp-system",
-          "x": 14, "y": 28, "width": 160, "height": 36
+          "Id": "grp-system",
+          "Title": "System",
+          "X": 16,
+          "Y": 140,
+          "Width": 340,
+          "Height": 110
         }
       ]
     },
     {
-      "id": "tools",
-      "title": "Tools",
-      "buttons": [
+      "Id": "tools",
+      "Title": "Tools",
+      "Buttons": [
         {
-          "id": "btn-notepad",
-          "label": "Notepad",
-          "executor": "process",
-          "scriptPath": "C:\\Windows\\System32\\notepad.exe",
-          "args": [],
-          "outputs": [],
-          "log": true,
-          "x": 16, "y": 16, "width": 150, "height": 36
+          "Id": "btn-notepad",
+          "Label": "Notepad",
+          "Executor": "process",
+          "ScriptPath": "C:\\Windows\\System32\\notepad.exe",
+          "Args": [],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "rtb"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": null,
+          "RunInBackground": false,
+          "X": 16,
+          "Y": 16,
+          "Width": 150,
+          "Height": 36,
+          "GroupId": null
         },
         {
-          "id": "btn-taskmgr",
-          "label": "Task Manager",
-          "executor": "process",
-          "scriptPath": "C:\\Windows\\System32\\taskmgr.exe",
-          "args": [],
-          "outputs": [],
-          "log": true,
-          "x": 178, "y": 16, "width": 150, "height": 36
+          "Id": "btn-taskmgr",
+          "Label": "Task Manager",
+          "Executor": "process",
+          "ScriptPath": "C:\\Windows\\System32\\taskmgr.exe",
+          "Args": [],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "rtb"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": null,
+          "RunInBackground": false,
+          "X": 178,
+          "Y": 16,
+          "Width": 150,
+          "Height": 36,
+          "GroupId": null
+        }
+      ],
+      "Groups": []
+    }
+  ],
+  "Menus": [
+    {
+      "Title": "&Quick",
+      "Items": [
+        {
+          "Id": "menu-taskmgr",
+          "Label": "Task Manager",
+          "Executor": "process",
+          "ScriptPath": "C:\\Windows\\System32\\taskmgr.exe",
+          "Args": [],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "rtb"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": null,
+          "RunInBackground": false,
+          "X": 0,
+          "Y": 0,
+          "Width": 0,
+          "Height": 0,
+          "GroupId": null
+        },
+        {
+          "Id": "menu-notepad",
+          "Label": "Notepad",
+          "Executor": "process",
+          "ScriptPath": "C:\\Windows\\System32\\notepad.exe",
+          "Args": [],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "rtb"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": null,
+          "RunInBackground": false,
+          "X": 0,
+          "Y": 0,
+          "Width": 0,
+          "Height": 0,
+          "GroupId": null
+        },
+        {
+          "Id": null,
+          "Label": "-",
+          "Executor": "powershell",
+          "ScriptPath": null,
+          "Args": [],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "rtb"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": null,
+          "RunInBackground": false,
+          "X": 0,
+          "Y": 0,
+          "Width": 0,
+          "Height": 0,
+          "GroupId": null
+        },
+        {
+          "Id": "menu-ipconfig",
+          "Label": "IP Configuration ({{computerName}})",
+          "Executor": "powershell",
+          "ScriptPath": "scripts\\Get-IpInfo.ps1",
+          "Args": [
+            "-ComputerName",
+            "{{computerName}}"
+          ],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "rtb",
+            "rtb",
+            "grid"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": null,
+          "RunInBackground": false,
+          "X": 0,
+          "Y": 0,
+          "Width": 0,
+          "Height": 0,
+          "GroupId": null
         }
       ]
     }

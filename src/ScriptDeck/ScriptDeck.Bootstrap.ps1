@@ -198,3 +198,138 @@ function Write-Grid {
         }
     }
 }
+
+# ---------------------------------------------------------------------------
+# Set-SharedInput / Get-SharedInput / Remove-SharedInput
+#
+# Manipulate ScriptDeck's session-scoped Volatile shared inputs at
+# runtime. Once Set, the value becomes a $variable for every subsequent
+# button click in the same workspace -- same convention as Static
+# (workspace-JSON) inputs.
+#
+#   $token = Invoke-RestMethod ... | Select -ExpandProperty access_token
+#   Set-SharedInput -Id 'authToken' -Value $token
+#   # ...later, in another button's script:
+#   Invoke-RestMethod -Headers @{ Authorization = "Bearer $authToken" } ...
+#
+# Mechanics: each helper emits a PSObject with a sentinel property the
+# executor intercepts. The objects NEVER reach the console RTB or
+# results grid -- they're routed entirely to Shell's session-input
+# dispatch.
+#
+# Duplicate rule: a Static input (one declared in the workspace JSON)
+# cannot be shadowed by a Volatile input. Set-SharedInput throws a
+# terminating error in that case; Remove-SharedInput refuses to remove
+# a Static one. Use the Inputs grid in the Shell UI for Static-input
+# management.
+#
+# Session inputs are cleared when the workspace closes / switches or
+# the app exits. They never write to disk.
+# ---------------------------------------------------------------------------
+
+function Set-SharedInput {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [string]$Id,
+
+        [Parameter(Mandatory = $true, Position = 1)]
+        [AllowEmptyString()]
+        [AllowNull()]
+        $Value,
+
+        [Parameter(Position = 2)]
+        [string]$Label
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Id)) {
+        throw "Set-SharedInput: -Id is required."
+    }
+
+    # Client-side duplicate check. ScriptDeckInputs is published into
+    # every runspace at dispatch by PowerShellExecutor; its .Static
+    # member is the list of workspace-declared input ids. If it's not
+    # present (test runs / a host that doesn't publish it) we just
+    # skip the check -- Shell still has its own server-side guard.
+    if ((Test-Path Variable:Script:ScriptDeckInputs -ErrorAction SilentlyContinue) -or `
+        (Test-Path Variable:Global:ScriptDeckInputs  -ErrorAction SilentlyContinue) -or `
+        (Get-Variable -Name 'ScriptDeckInputs' -Scope Global -ErrorAction SilentlyContinue)) {
+        $meta = Get-Variable -Name 'ScriptDeckInputs' -ValueOnly -ErrorAction SilentlyContinue
+        if ($meta -and $meta.Static -and ($meta.Static -contains $Id)) {
+            throw "Set-SharedInput: '$Id' is already a Static workspace input. Session inputs cannot shadow Static ones."
+        }
+    }
+
+    # Emit the sentinel-tagged object. The executor's DataAdded handler
+    # intercepts on __ScriptDeckSetSharedInput == $true and routes to
+    # Shell.OnSessionInputSetRequested. The object never appears in
+    # any user-visible output.
+    $val = if ($null -eq $Value) { '' } else { [string]$Value }
+    [PSCustomObject]@{
+        __ScriptDeckSetSharedInput = $true
+        Id                         = $Id
+        Value                      = $val
+        Label                      = $Label
+    }
+}
+
+function Get-SharedInput {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [string]$Id
+    )
+
+    # Inputs surface as runspace variables. With an Id, just return
+    # that variable's value (the simple case scripts usually want).
+    # Without an Id, return everything ScriptDeck published: walk
+    # $ScriptDeckInputs metadata and emit one record per known input
+    # tagged with Scope.
+    if ($PSBoundParameters.ContainsKey('Id') -and -not [string]::IsNullOrEmpty($Id)) {
+        $v = Get-Variable -Name $Id -ValueOnly -ErrorAction SilentlyContinue
+        return $v
+    }
+
+    $meta = Get-Variable -Name 'ScriptDeckInputs' -ValueOnly -ErrorAction SilentlyContinue
+    if (-not $meta) { return @() }
+
+    $results = @()
+    foreach ($scope in @('Static', 'Volatile')) {
+        foreach ($name in @($meta.$scope)) {
+            if ([string]::IsNullOrEmpty($name)) { continue }
+            $val = Get-Variable -Name $name -ValueOnly -ErrorAction SilentlyContinue
+            $results += [PSCustomObject]@{
+                Id    = $name
+                Value = $val
+                Scope = $scope
+            }
+        }
+    }
+    return $results
+}
+
+function Remove-SharedInput {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [string]$Id
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Id)) {
+        throw "Remove-SharedInput: -Id is required."
+    }
+
+    # Refuse to remove a Static input -- scripts shouldn't be able to
+    # mutate the workspace's declared inputs.
+    $meta = Get-Variable -Name 'ScriptDeckInputs' -ValueOnly -ErrorAction SilentlyContinue
+    if ($meta -and $meta.Static -and ($meta.Static -contains $Id)) {
+        throw "Remove-SharedInput: '$Id' is a Static workspace input. Only Volatile (session-scoped) inputs can be removed."
+    }
+
+    # Silent no-op for unknown ids matches PowerShell's Remove-Item
+    # convention with -ErrorAction SilentlyContinue.
+    [PSCustomObject]@{
+        __ScriptDeckRemoveSharedInput = $true
+        Id                            = $Id
+    }
+}

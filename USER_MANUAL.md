@@ -730,7 +730,6 @@ fields can be absolute or relative; relative paths resolve against
 | `x`, `y`        | position (canvas-relative if no `groupId`, group-relative otherwise) |
 | `width`, `height` | 0 or omitted = defaults (150x36) |
 | `workingDirectory` | optional; relative paths resolve against `scriptsRoot` |
-| `extendedGridData` | for buttons whose script returns "wide" objects you want to round-trip into the grid as JSON |
 | `rtbFormat`        | PowerShell-only. How structured records render in the console RTB. One of `default`, `list`, `table`, `json`. Omit / `null` = `default`. See `Running buttons -> RTB format`. |
 | `runInBackground`  | bool. When true, clicking the button enqueues onto the background job queue (one worker, FIFO) instead of running on the foreground single-flight gate. Output appears in the Jobs tab. See §6 below. |
 

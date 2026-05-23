@@ -26,7 +26,6 @@ namespace ScriptDeck.Forms
         private CheckBox checkBox_OutputGrid;
         private CheckBox checkBox_Confirm;
         private CheckBox checkBox_Log;
-        private CheckBox checkBox_ExtendedGrid;
         private CheckBox checkBox_RunInBackground;
         private Label label_RtbFormat;
         private ComboBox comboBox_RtbFormat;
@@ -62,7 +61,6 @@ namespace ScriptDeck.Forms
             this.checkBox_OutputGrid = new CheckBox();
             this.checkBox_Confirm    = new CheckBox();
             this.checkBox_Log        = new CheckBox();
-            this.checkBox_ExtendedGrid = new CheckBox();
             this.checkBox_RunInBackground = new CheckBox();
             this.label_RtbFormat       = new Label();
             this.comboBox_RtbFormat    = new ComboBox();
@@ -177,16 +175,14 @@ namespace ScriptDeck.Forms
             //
             // groupBox_Outputs
             //
-            // Holds both the destination toggles AND the PowerShell-only
-            // "extended grid" toggle. They're conceptually related — all
-            // affect how output is presented — so grouping them here
-            // keeps the dialog tidy without inventing a separate panel.
+            // Holds the destination toggles plus the RTB-format combo
+            // (since both affect how output is presented). Compact box
+            // -- two checkboxes and one labelled combobox row.
             this.groupBox_Outputs.Location = new System.Drawing.Point(12, 280);
-            this.groupBox_Outputs.Size = new System.Drawing.Size(458, 115);
+            this.groupBox_Outputs.Size = new System.Drawing.Size(458, 90);
             this.groupBox_Outputs.Text = "Output destinations";
             this.groupBox_Outputs.Controls.Add(this.checkBox_OutputRtb);
             this.groupBox_Outputs.Controls.Add(this.checkBox_OutputGrid);
-            this.groupBox_Outputs.Controls.Add(this.checkBox_ExtendedGrid);
             this.groupBox_Outputs.Controls.Add(this.label_RtbFormat);
             this.groupBox_Outputs.Controls.Add(this.comboBox_RtbFormat);
             //
@@ -202,26 +198,15 @@ namespace ScriptDeck.Forms
             this.checkBox_OutputGrid.Location = new System.Drawing.Point(160, 25);
             this.checkBox_OutputGrid.Text = "Grid (structured rows)";
             //
-            // checkBox_ExtendedGrid
-            //
-            // PowerShell-only: see Workspace.Button.ExtendedGridData for
-            // semantics. Disabled until the executor is "powershell" —
-            // toggling Cmd/Process buttons would dangle a meaningless
-            // option. Also gated on Grid being checked, since it has no
-            // effect without a grid destination.
-            this.checkBox_ExtendedGrid.AutoSize = true;
-            this.checkBox_ExtendedGrid.Location = new System.Drawing.Point(12, 55);
-            this.checkBox_ExtendedGrid.Text = "Extended grid data (include PS* properties; primitives become rows)";
-            //
             // label_RtbFormat / comboBox_RtbFormat
             //
             // PowerShell-only. Controls how structured records render in
             // the console RTB ("default" = obj.ToString(); list/table/json/csv
             // produce friendlier text). Has no effect on the grid output.
             this.label_RtbFormat.AutoSize = true;
-            this.label_RtbFormat.Location = new System.Drawing.Point(12, 88);
+            this.label_RtbFormat.Location = new System.Drawing.Point(12, 55);
             this.label_RtbFormat.Text = "RTB format:";
-            this.comboBox_RtbFormat.Location = new System.Drawing.Point(96, 84);
+            this.comboBox_RtbFormat.Location = new System.Drawing.Point(96, 51);
             this.comboBox_RtbFormat.Width = 130;
             this.comboBox_RtbFormat.DropDownStyle = ComboBoxStyle.DropDownList;
             this.comboBox_RtbFormat.Items.AddRange(new object[] {
@@ -301,13 +286,6 @@ namespace ScriptDeck.Forms
             this.Controls.Add(this.checkBox_RunInBackground);
             this.Controls.Add(this.button_Ok);
             this.Controls.Add(this.button_Cancel);
-
-            // Wire enable/disable for the extended-grid toggle. We can't
-            // bind reactivity in Designer code, so attach handlers here
-            // and call once to seed the initial state.
-            this.comboBox_Executor.TextChanged += this.OnExecutorOrGridToggleChanged;
-            this.checkBox_OutputGrid.CheckedChanged += this.OnExecutorOrGridToggleChanged;
-            this.Shown += (s, e) => this.OnExecutorOrGridToggleChanged(this, System.EventArgs.Empty);
 
             this.groupBox_Outputs.ResumeLayout(false);
             this.groupBox_Outputs.PerformLayout();

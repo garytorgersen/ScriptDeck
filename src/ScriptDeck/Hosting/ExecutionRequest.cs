@@ -38,16 +38,6 @@ namespace ScriptDeck.Hosting
             new HashSet<string>(System.StringComparer.OrdinalIgnoreCase) { "rtb" };
 
         /// <summary>
-        /// PowerShell-only: when true, the grid receives EVERY property
-        /// of every emitted PSObject (including the engine-injected
-        /// PS* metadata like PSComputerName / PSPath / PSShowComputerName)
-        /// AND primitive outputs (strings, ints) become a single-column
-        /// "Value" row. Off by default — most scripts pre-shape output
-        /// with Select-Object and don't want the noise.
-        /// </summary>
-        public bool ExtendedGridData { get; set; }
-
-        /// <summary>
         /// PowerShell-only RTB rendering format for structured records.
         /// See <see cref="ScriptDeck.Workspace.Button.RtbFormat"/> for
         /// the supported values. Null/empty = "default" (obj.ToString()).
@@ -106,5 +96,19 @@ namespace ScriptDeck.Hosting
         /// </summary>
         public IDictionary<string, string> SharedInputs { get; set; } =
             new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The subset of <see cref="SharedInputs"/> ids that came from
+        /// the workspace JSON (i.e. are Static). The rest are
+        /// session-scoped (Volatile). Used by the bootstrap helpers'
+        /// duplicate-detection (Set-SharedInput refuses to shadow a
+        /// Static id) and by PowerShellExecutor to publish a
+        /// <c>$ScriptDeckInputs</c> metadata hashtable into the runspace.
+        /// Empty when the caller didn't distinguish (e.g. test fixtures);
+        /// in that case every id is treated as Volatile and the
+        /// no-duplicates rule simply doesn't fire.
+        /// </summary>
+        public System.Collections.Generic.ISet<string> StaticInputIds { get; set; } =
+            new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
     }
 }

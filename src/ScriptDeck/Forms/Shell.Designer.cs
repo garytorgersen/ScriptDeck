@@ -60,7 +60,12 @@ namespace ScriptDeck.Forms
         private SplitContainer splitContainer_Output;
         private RichTextBox richTextBox_Console;
         private DataGridView dataGridView_Results;
+        // Splits the lower bottom band horizontally: logs on the left,
+        // shared/session inputs grid on the right. Sits inside
+        // splitContainer_Lower.Panel2.
+        private SplitContainer splitContainer_LogsAndInputs;
         private RichTextBox richTextBox_Logs;
+        private InputsGridPanel inputsGridPanel;
 
         // Toolbar between the tab strip and the output area.
         // Houses a simple find-and-highlight box + two view toggles
@@ -138,7 +143,9 @@ namespace ScriptDeck.Forms
             this.splitContainer_Output = new SplitContainer();
             this.richTextBox_Console = new RichTextBox();
             this.dataGridView_Results = new DataGridView();
+            this.splitContainer_LogsAndInputs = new SplitContainer();
             this.richTextBox_Logs = new RichTextBox();
+            this.inputsGridPanel = new InputsGridPanel();
 
             this.panel_Toolbar       = new Panel();
             this.label_Search        = new Label();
@@ -177,6 +184,10 @@ namespace ScriptDeck.Forms
             this.splitContainer_Lower.Panel1.SuspendLayout();
             this.splitContainer_Lower.Panel2.SuspendLayout();
             this.splitContainer_Lower.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)(this.splitContainer_LogsAndInputs)).BeginInit();
+            this.splitContainer_LogsAndInputs.Panel1.SuspendLayout();
+            this.splitContainer_LogsAndInputs.Panel2.SuspendLayout();
+            this.splitContainer_LogsAndInputs.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.splitContainer_Output)).BeginInit();
             this.splitContainer_Output.Panel1.SuspendLayout();
             this.splitContainer_Output.Panel2.SuspendLayout();
@@ -501,7 +512,41 @@ namespace ScriptDeck.Forms
             // between the foreground Console+Grid split and the Jobs view
             // without losing either.
             this.splitContainer_Lower.Panel1.Controls.Add(this.tabControl_Output);
-            this.splitContainer_Lower.Panel2.Controls.Add(this.richTextBox_Logs);
+            // Bottom band: vertical split between Logs (left) and the
+            // Inputs grid (right). See splitContainer_LogsAndInputs
+            // section below for the rationale on the 70/30 default split.
+            this.splitContainer_Lower.Panel2.Controls.Add(this.splitContainer_LogsAndInputs);
+
+            //
+            // splitContainer_LogsAndInputs — left: logs RTB, right: inputs grid
+            //
+            // Vertical split (splitter bar is vertical, panels side by side).
+            // Default 70/30 favors the logs since that's what the user is
+            // typically watching; the grid just needs enough width to show
+            // an id + short value comfortably. Users can drag to suit.
+            this.splitContainer_LogsAndInputs.Dock = DockStyle.Fill;
+            this.splitContainer_LogsAndInputs.Orientation = Orientation.Vertical;
+            this.splitContainer_LogsAndInputs.SplitterWidth = 5;
+            // See splitContainer_Outer for why we explicit-Size before
+            // setting SplitterDistance + Panel*MinSize.
+            this.splitContainer_LogsAndInputs.Size = new System.Drawing.Size(1100, 300);
+            this.splitContainer_LogsAndInputs.SplitterDistance = 770;
+            this.splitContainer_LogsAndInputs.Panel1MinSize = 120;
+            this.splitContainer_LogsAndInputs.Panel2MinSize = 180;
+            this.splitContainer_LogsAndInputs.Name = "splitContainer_LogsAndInputs";
+            this.splitContainer_LogsAndInputs.Panel1.Controls.Add(this.richTextBox_Logs);
+            this.splitContainer_LogsAndInputs.Panel2.Controls.Add(this.inputsGridPanel);
+
+            //
+            // inputsGridPanel
+            //
+            // UserControl that hosts the Add Static / Add Volatile toolbar
+            // plus the grid. Shell wires its events (Add* / Remove /
+            // ClearVolatile / VolatileValueEdited) to handlers that
+            // mutate either the workspace model (Static) or the session-
+            // input dict (Volatile).
+            this.inputsGridPanel.Dock = DockStyle.Fill;
+            this.inputsGridPanel.Name = "inputsGridPanel";
 
             //
             // tabControl_Output -- two pages, "Output" (existing
@@ -749,6 +794,11 @@ namespace ScriptDeck.Forms
             this.splitContainer_Jobs.ResumeLayout(false);
             this.tabPage_Jobs.ResumeLayout(false);
             this.tabControl_Output.ResumeLayout(false);
+            // Resume the inner Logs|Inputs split BEFORE its parent (splitContainer_Lower.Panel2).
+            this.splitContainer_LogsAndInputs.Panel1.ResumeLayout(false);
+            this.splitContainer_LogsAndInputs.Panel2.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)(this.splitContainer_LogsAndInputs)).EndInit();
+            this.splitContainer_LogsAndInputs.ResumeLayout(false);
             this.splitContainer_Lower.Panel1.ResumeLayout(false);
             this.splitContainer_Lower.Panel2.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)(this.splitContainer_Lower)).EndInit();

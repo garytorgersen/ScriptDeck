@@ -38,7 +38,6 @@ namespace ScriptDeck.Tests
             bool wantGrid = false,
             bool wantRtb = true,
             string rtbFormat = null,
-            bool extendedGrid = false,
             IDictionary<string, string> sharedInputs = null)
         {
             string path = _fx.WriteScript(scriptBody);
@@ -52,7 +51,6 @@ namespace ScriptDeck.Tests
                 ButtonLabel      = "test",
                 OutputTargets    = targets,
                 RtbFormat        = rtbFormat,
-                ExtendedGridData = extendedGrid,
                 SharedInputs     = sharedInputs ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             };
         }
@@ -196,17 +194,6 @@ namespace ScriptDeck.Tests
             var (sink, _) = await RunAsync(BuildRequest("'just text'", wantGrid: true));
             Assert.Empty(sink.GridColumns);
             Assert.Empty(sink.GridRows);
-        }
-
-        [Fact]
-        public async Task ExtendedGridData_Primitives_Become_Single_Column_Rows()
-        {
-            var (sink, _) = await RunAsync(BuildRequest(
-                "'a'; 'b'; 'c'", wantGrid: true, extendedGrid: true));
-            // Pinned to a single "Value" column on first primitive.
-            Assert.Equal(new[] { "Value" }, sink.GridColumns);
-            Assert.Equal(3, sink.GridRows.Count);
-            Assert.Equal("a", sink.GridRows[0][0]);
         }
 
         // ---- D. RTB formats ----

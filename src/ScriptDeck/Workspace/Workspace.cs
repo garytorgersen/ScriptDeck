@@ -130,16 +130,6 @@ namespace ScriptDeck.Workspace
         public bool Log { get; set; } = true;
 
         /// <summary>
-        /// PowerShell-only: when true, the grid shows the FULL property
-        /// surface of every output object (including PS* engine
-        /// properties) and primitive outputs become single-column rows.
-        /// Off by default; scripts that already shape output with
-        /// Select-Object usually want the cleaner default. Has no effect
-        /// for cmd / process executors.
-        /// </summary>
-        public bool ExtendedGridData { get; set; }
-
-        /// <summary>
         /// PowerShell-only: how structured output (PSObjects with
         /// properties) is rendered into the console RTB. The grid output
         /// is unaffected — it always receives the structured form.
