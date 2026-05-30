@@ -284,8 +284,71 @@ namespace ScriptDeck.Hosting
             // completes (column widths and document structure need the
             // full record set). Cap at MaxBufferedRtbRecords to keep the
             // RTB readable; anything bigger should flow through the grid.
+            //
+            // "raw" is the escape hatch: append a ForEach-Object filter
+            // that passes ScriptDeck-tagged objects through verbatim
+            // (so Write-Rtb / Write-Grid / Set-SharedInput keep working)
+            // and pipes everything else through Out-String -Stream so
+            // the script's own Format-Table / Format-List / custom
+            // whitespace renders as the user wrote it. The auto-route-
+            // structured-objects-to-grid path naturally disables itself
+            // in raw mode because untagged objects arrive as strings
+            // (IsStructured=false) rather than rich PSObjects -- so the
+            // grid stays empty unless the user explicitly emits via
+            // Write-Grid.
             string rtbFormat = (req.RtbFormat ?? "default").Trim().ToLowerInvariant();
+            bool isRaw     = rtbFormat == "raw";
             bool bufferRtb = wantRtb && (rtbFormat == "table" || rtbFormat == "json" || rtbFormat == "csv");
+
+            if (isRaw)
+            {
+                // Raw-mode pipeline transform. Tagged objects (Write-Rtb /
+                // Write-Grid / Set-SharedInput / Remove-SharedInput) must
+                // reach DataAdded with their PSObject intact so the
+                // executor's routing logic still works. Untagged objects
+                // (including Format-Table / Format-List formatter
+                // directives) must be rendered AS A SEQUENCE through the
+                // PowerShell default formatter -- per-object Out-String
+                // breaks the StartData/EntryData/EndData sequence and
+                // emits nothing useful.
+                //
+                // Solution: ForEach-Object's three-block form (-Begin /
+                // -Process / -End). Begin builds a buffer, Process emits
+                // tagged objects immediately (responsive Write-Grid /
+                // Set-SharedInput) and collects untagged ones, End
+                // flushes the buffer through Out-String -Stream as a
+                // single pipeline so the formatter has the full record
+                // set to render. Variables flow across the three blocks
+                // because they share ForEach-Object's scope.
+                //
+                // Trade-off: untagged output appears at script-completion
+                // rather than streaming. Raw mode is opt-in -- the user
+                // is asking for PS-default rendering, which inherently
+                // wants the full sequence anyway. Tag names duplicated
+                // from TryHandleSharedInputTag / Write-Rtb / Write-Grid;
+                // keep these literals in sync with the bootstrap module.
+                var beginBlock = System.Management.Automation.ScriptBlock.Create(
+                    "$buffer = New-Object System.Collections.ArrayList");
+                var processBlock = System.Management.Automation.ScriptBlock.Create(@"
+                    if ($null -eq $_) { return }
+                    if ($_.PSObject.Properties['__ScriptDeckTarget']         -or
+                        $_.PSObject.Properties['__ScriptDeckSetSharedInput']  -or
+                        $_.PSObject.Properties['__ScriptDeckRemoveSharedInput']) {
+                        $_
+                    } else {
+                        [void]$buffer.Add($_)
+                    }
+                ");
+                var endBlock = System.Management.Automation.ScriptBlock.Create(@"
+                    if ($buffer -and $buffer.Count -gt 0) {
+                        $buffer | Out-String -Stream
+                    }
+                ");
+                ps.AddCommand("ForEach-Object")
+                  .AddParameter("Begin",   beginBlock)
+                  .AddParameter("Process", processBlock)
+                  .AddParameter("End",     endBlock);
+            }
             int maxBufferedRtbRecords = MaxBufferedRtbRecords;
             var rtbBuffer = bufferRtb ? new List<PSObject>(capacity: 64) : null;
             bool rtbTruncated = false;
@@ -369,6 +432,19 @@ namespace ScriptDeck.Hosting
                 else if (rtbFormat == "list")
                 {
                     sink.WriteOutput(FormatAsList(obj));
+                }
+                else if (isRaw)
+                {
+                    // Raw-mode lines come from one of two places:
+                    //   (a) Out-String -Stream (untagged user output),
+                    //       which terminates each line itself
+                    //   (b) Write-Rtb -tagged objects, where the user
+                    //       decides what's in the payload
+                    // Trim trailing CR/LF and append exactly one
+                    // newline so both shapes render uniformly without
+                    // doubling whitespace on Out-String'd content.
+                    var text = (obj.ToString() ?? string.Empty).TrimEnd('\r', '\n');
+                    sink.WriteOutput(text + Environment.NewLine);
                 }
                 else
                 {

@@ -131,8 +131,7 @@ namespace ScriptDeck.Workspace
 
         /// <summary>
         /// PowerShell-only: how structured output (PSObjects with
-        /// properties) is rendered into the console RTB. The grid output
-        /// is unaffected — it always receives the structured form.
+        /// properties) is rendered into the console RTB.
         ///
         /// Recognized values (case-insensitive):
         ///   "default" / null / empty — obj.ToString() per record (legacy).
@@ -142,6 +141,17 @@ namespace ScriptDeck.Workspace
         ///             the full result.
         ///   "json"  — pretty-printed JSON array.
         ///   "csv"   — header row + RFC-4180 quoted values.
+        ///   "raw"   — hand console rendering entirely to PowerShell's
+        ///             default formatter via `Out-String -Stream`. The
+        ///             script's own Format-Table / Format-List / custom
+        ///             whitespace render as-written. Auto-grid population
+        ///             is also disabled in this mode (untagged structured
+        ///             objects no longer become rows), but Write-Grid
+        ///             STILL works for explicit grid output -- the
+        ///             tag-routing tags survive the filter.
+        ///
+        /// For non-raw modes, grid output receives the structured form
+        /// regardless of RtbFormat (independent surface).
         ///
         /// Buffered formats cap at 2000 records to keep the RTB usable;
         /// the executor emits a "(truncated)" warning when exceeded.

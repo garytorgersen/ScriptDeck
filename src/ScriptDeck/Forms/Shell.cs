@@ -212,6 +212,16 @@ namespace ScriptDeck.Forms
             // the grid header so the UI doesn't look broken at launch.
             RefreshInputsGrid();
 
+            // Right-click context menus on the console RTB and the
+            // results grid. Each item routes through the same handler
+            // as its toolbar twin so the two surfaces stay in sync --
+            // change the behavior in one place and both menus + buttons
+            // pick it up. Built lazily here rather than in the Designer
+            // file so the menu/handler coupling stays visible in one
+            // file.
+            BuildConsoleContextMenu();
+            BuildGridContextMenu();
+
             Sink.Log("ScriptDeck started.");
             Sink.WriteInfo("Welcome to ScriptDeck." + Environment.NewLine);
             Sink.WriteInfo("Open a workspace (File \u2192 Open Workspace) to load tabs, buttons, and shared inputs." + Environment.NewLine);
@@ -219,6 +229,54 @@ namespace ScriptDeck.Forms
 
             UpdateStatusBar();
             UpdateBusyUi(false);
+        }
+
+        // ----- Right-click menus -------------------------------------------
+        //
+        // Both menus delegate to the same handlers the toolbar buttons
+        // use, so context-menu Clear == toolbar Clear, no behavior drift.
+
+        private void BuildConsoleContextMenu()
+        {
+            if (richTextBox_Console == null) return;
+            var menu = new ContextMenuStrip();
+            var miClear  = new ToolStripMenuItem("Clear console");
+            var miExport = new ToolStripMenuItem("Export console text...");
+            miClear.Click  += button_ClearConsole_Click;
+            miExport.Click += button_ExportConsole_Click;
+            menu.Items.AddRange(new ToolStripItem[] { miClear, miExport });
+
+            // Disable inapplicable items on open so the user gets a
+            // "nothing to do" signal instead of a no-op click + popup.
+            menu.Opening += (_, __) =>
+            {
+                bool hasText = richTextBox_Console.TextLength > 0;
+                miClear.Enabled  = hasText;
+                miExport.Enabled = hasText;
+            };
+
+            richTextBox_Console.ContextMenuStrip = menu;
+        }
+
+        private void BuildGridContextMenu()
+        {
+            if (dataGridView_Results == null) return;
+            var menu = new ContextMenuStrip();
+            var miExport  = new ToolStripMenuItem("Export to CSV...");
+            var miPopout  = new ToolStripMenuItem("Open in new window");
+            miExport.Click += button_ExportGridCsv_Click;
+            miPopout.Click += button_GridPopout_Click;
+            menu.Items.AddRange(new ToolStripItem[] { miExport, miPopout });
+
+            menu.Opening += (_, __) =>
+            {
+                bool hasData = dataGridView_Results.Columns.Count > 0
+                            && dataGridView_Results.Rows.Count    > 0;
+                miExport.Enabled = hasData;
+                miPopout.Enabled = hasData;
+            };
+
+            dataGridView_Results.ContextMenuStrip = menu;
         }
 
         private void OnShellClosed(object sender, FormClosedEventArgs e)
@@ -888,6 +946,173 @@ namespace ScriptDeck.Forms
             ClearFindHighlights();
         }
 
+        // ----- Console + grid quick actions ---------------------------------
+        //
+        // The four toolbar glyph buttons and the matching context-menu
+        // entries on the RTB / grid all route here so a single handler
+        // owns the operation. Each is intentionally permissive about
+        // empty state: clicking Clear/Export on an empty console or grid
+        // is a no-op (with a brief log line) rather than an error -- the
+        // user shouldn't have to think about whether there's content
+        // before clicking.
+
+        private void button_ClearConsole_Click(object sender, EventArgs e)
+        {
+            if (richTextBox_Console == null || richTextBox_Console.TextLength == 0)
+                return;
+            // Wipe text AND any find-highlight state -- otherwise the
+            // next typed find would search a zero-length doc and the
+            // user might see stale "no matches" feedback.
+            ClearFindHighlights();
+            richTextBox_Console.Clear();
+        }
+
+        private void button_ExportConsole_Click(object sender, EventArgs e)
+        {
+            if (richTextBox_Console == null || richTextBox_Console.TextLength == 0)
+            {
+                MessageBox.Show(this,
+                    "There is no console content to export.",
+                    "Nothing to export",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using (var dlg = new SaveFileDialog
+            {
+                Title    = "Export console text",
+                // .txt = SaveFile with PlainText (strips RTF/colors).
+                // .rtf = SaveFile with RichText (preserves green-on-black).
+                Filter   = "Plain text (*.txt)|*.txt|Rich text with formatting (*.rtf)|*.rtf",
+                FileName = "ScriptDeck-console-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".txt",
+                AddExtension     = true,
+                OverwritePrompt  = true,
+            })
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+                // FilterIndex is 1-based: 1=txt, 2=rtf. We honor the
+                // user's choice rather than guessing from the typed
+                // extension -- they may have edited the FileName.
+                var fileType = dlg.FilterIndex == 2
+                    ? RichTextBoxStreamType.RichText
+                    : RichTextBoxStreamType.PlainText;
+                try
+                {
+                    richTextBox_Console.SaveFile(dlg.FileName, fileType);
+                    Sink.Log($"Console exported: {dlg.FileName}");
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this,
+                        "Failed to write the console export:\n\n" + ex.Message,
+                        "Export failed",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private void button_ExportGridCsv_Click(object sender, EventArgs e)
+        {
+            var grid = dataGridView_Results;
+            if (grid == null || grid.Columns.Count == 0 || grid.Rows.Count == 0)
+            {
+                MessageBox.Show(this,
+                    "There are no grid results to export.",
+                    "Nothing to export",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using (var dlg = new SaveFileDialog
+            {
+                Title    = "Export grid to CSV",
+                Filter   = "CSV (Comma-delimited) (*.csv)|*.csv",
+                FileName = "ScriptDeck-grid-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".csv",
+                AddExtension    = true,
+                OverwritePrompt = true,
+            })
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+                try
+                {
+                    WriteGridToCsv(grid, dlg.FileName);
+                    Sink.Log($"Grid exported: {dlg.FileName}");
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this,
+                        "Failed to write the CSV:\n\n" + ex.Message,
+                        "Export failed",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private void button_GridPopout_Click(object sender, EventArgs e)
+        {
+            var grid = dataGridView_Results;
+            if (grid == null || grid.Columns.Count == 0 || grid.Rows.Count == 0)
+            {
+                MessageBox.Show(this,
+                    "The grid is empty -- run a script that emits structured output first.",
+                    "Nothing to show",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // Snapshot the current shape + data and hand it to a new
+            // modeless window. The popout is independent: clearing or
+            // re-filling the main grid doesn't change the snapshot.
+            // Modeless so the user can compare side-by-side or run
+            // another script while keeping the previous result visible.
+            var popout = new GridOutForm(grid);
+            popout.Show(this);
+        }
+
+        // RFC 4180-ish CSV writer. UTF-8 with BOM so Excel auto-detects
+        // the encoding instead of mojibake-ing high-unicode cells. Each
+        // cell quoted only if it contains a comma, quote, or newline --
+        // that keeps the output diffable for trivial grids while staying
+        // safe for the messy ones.
+        private static void WriteGridToCsv(DataGridView grid, string path)
+        {
+            var utf8WithBom = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+            using (var sw = new StreamWriter(path, append: false, encoding: utf8WithBom))
+            {
+                // Header row: visible column order, skipping hidden columns
+                // so the CSV matches what the user sees on screen.
+                var cols = grid.Columns.Cast<DataGridViewColumn>()
+                    .Where(c => c.Visible)
+                    .OrderBy(c => c.DisplayIndex)
+                    .ToList();
+
+                sw.WriteLine(string.Join(",", cols.Select(c => CsvEscape(c.HeaderText ?? c.Name ?? string.Empty))));
+
+                foreach (DataGridViewRow row in grid.Rows)
+                {
+                    if (row.IsNewRow) continue; // the "*" placeholder row at the bottom
+                    var values = cols.Select(c =>
+                    {
+                        var cell = row.Cells[c.Index];
+                        var v = cell?.Value;
+                        if (v == null || v == DBNull.Value) return string.Empty;
+                        return v.ToString();
+                    });
+                    sw.WriteLine(string.Join(",", values.Select(CsvEscape)));
+                }
+            }
+        }
+
+        private static string CsvEscape(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            bool needsQuotes = s.IndexOfAny(new[] { ',', '"', '\r', '\n' }) >= 0;
+            if (!needsQuotes) return s;
+            return "\"" + s.Replace("\"", "\"\"") + "\"";
+        }
+
         private void HighlightInConsole(string term)
         {
             // RichTextBox.Find returns the start index of a match or -1.
@@ -1021,6 +1246,120 @@ namespace ScriptDeck.Forms
                                                     sharedInputs: BuildSharedInputSnapshot()))
             {
                 dlg.ShowDialog(this);
+            }
+        }
+
+        private void menu_Tools_EditBootstrap_Click(object sender, EventArgs e)
+        {
+            // The bootstrap is the .ps1 file dot-sourced into every fresh
+            // runspace; its path is the same one PowerShellExecutor uses
+            // (AppContext.BaseDirectory) so editing here is editing the
+            // exact file the executors load.
+            //
+            // Two caveats to surface up-front:
+            //
+            //   1. The file is overwritten by every build (Copy to output)
+            //      -- edits made here disappear on the next rebuild from
+            //      source. For permanent changes, edit the file under
+            //      src/ScriptDeck/ in the source tree.
+            //
+            //   2. If the install is in a write-protected location
+            //      (Program Files), the editor's save will fail. The user
+            //      sees the OS error directly; we don't try to elevate.
+            if (_dispatcher == null) return;
+            string bootstrapPath = Path.Combine(AppContext.BaseDirectory, "ScriptDeck.Bootstrap.ps1");
+            if (!File.Exists(bootstrapPath))
+            {
+                MessageBox.Show(this,
+                    "ScriptDeck.Bootstrap.ps1 was not found at:\n\n" + bootstrapPath +
+                    "\n\nThe bootstrap file ships next to ScriptDeck.exe. " +
+                    "If it's missing, helpers like Write-Rtb, Write-Grid, and " +
+                    "Set-SharedInput won't be available.",
+                    "Bootstrap helper not found",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // mtime captured BEFORE opening so we can detect any save
+            // performed inside the editor (including hand-edits made
+            // outside the app, if the user has the file open elsewhere).
+            // FileInfo.LastWriteTimeUtc avoids DST/local-time foot-guns.
+            var fi = new FileInfo(bootstrapPath);
+            DateTime mtimeBefore = fi.LastWriteTimeUtc;
+
+            // Heads-up about the edits-lost-on-rebuild caveat. Shown
+            // once per click; users who don't like the modal can ignore
+            // it -- it's purely informational. (We don't suppress it
+            // with "don't show again" because the warning is short and
+            // the consequence -- silently losing your edits -- is real
+            // enough to warrant the reminder.)
+            //
+            // Skipped only when the running EXE is clearly the source
+            // build (Debug or Release output folder under the repo),
+            // since that's the case where the build will indeed clobber.
+            // For installed builds the file is the install copy, no
+            // build will overwrite it, so the warning is irrelevant.
+            string baseDirLower = AppContext.BaseDirectory.ToLowerInvariant().Replace('\\', '/');
+            bool looksLikeBuildOutput =
+                baseDirLower.Contains("/bin/debug/") || baseDirLower.Contains("/bin/release/");
+            if (looksLikeBuildOutput)
+            {
+                MessageBox.Show(this,
+                    "Heads up: you're running the Debug/Release build output. The next " +
+                    "build will overwrite ScriptDeck.Bootstrap.ps1 with the source-tree " +
+                    "copy under src/ScriptDeck/. For permanent edits, modify the source " +
+                    "file instead.",
+                    "Edits may be overwritten on next build",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+
+            string scriptsRoot = _activeWorkspace?.ScriptsRoot
+                ?? (string.IsNullOrEmpty(_activeWorkspacePath) ? null : Path.GetDirectoryName(_activeWorkspacePath));
+            using (var dlg = new ScriptEditorDialog(_dispatcher, scriptsRoot, initialPath: bootstrapPath,
+                                                    sharedInputs: BuildSharedInputSnapshot()))
+            {
+                dlg.Text = "Edit Bootstrap Helper -- " + Path.GetFileName(bootstrapPath);
+                dlg.ShowDialog(this);
+            }
+
+            // Detect whether the bootstrap was actually saved during the
+            // session. mtime delta is the simplest signal -- works whether
+            // the user clicked Save inside the editor, or edited the file
+            // externally in another tool while the dialog was open.
+            DateTime mtimeAfter;
+            try { mtimeAfter = File.GetLastWriteTimeUtc(bootstrapPath); }
+            catch { mtimeAfter = mtimeBefore; }
+
+            if (mtimeAfter <= mtimeBefore) return;
+
+            // File changed. Offer to reload the PS runspaces so the
+            // edits take effect immediately. Default to Yes -- the
+            // user just edited the file, they almost certainly want it
+            // applied. No is the safety hatch for "I want to compare
+            // before reloading" or "I have a foreground job mid-run
+            // that I don't want killed."
+            var dr = MessageBox.Show(this,
+                "ScriptDeck.Bootstrap.ps1 was modified.\n\n" +
+                "Reload the PowerShell session now so the updated helpers " +
+                "take effect?\n\n" +
+                "(This cancels any script that's currently running.)",
+                "Reload PowerShell session?",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1);
+            if (dr != DialogResult.Yes) return;
+
+            try
+            {
+                _dispatcher.ResetExecutors();
+                Sink.Log("Reloaded PowerShell session after bootstrap edit.");
+                Sink.WriteInfo("Bootstrap helpers reloaded." + Environment.NewLine);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this,
+                    "Failed to reset the PowerShell session:\n\n" + ex.Message +
+                    "\n\nThe edits are saved to disk; restart ScriptDeck to apply them.",
+                    "Reset failed",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -1187,11 +1526,17 @@ namespace ScriptDeck.Forms
             // workspace's Static rows.
             RefreshInputsGrid();
             Sink.Log($"Loaded workspace: {ws.Name} ({path})");
+            // Trailing blank lines give the console a quiet zone before
+            // the user's first script-run output lands, so the intro
+            // doesn't visually crowd up against the first record.
+            // Also fires for menu_File_New (which calls LoadWorkspace
+            // after creating + saving the file).
             Sink.WriteInfo(
                 $"Workspace '{ws.Name}' loaded. " +
                 $"{ws.Tabs.Count} tab(s), " +
                 $"{ws.Tabs.Sum(t => t.Buttons?.Count ?? 0)} button(s), " +
-                $"{ws.SharedInputs.Count} shared input(s).{Environment.NewLine}");
+                $"{ws.SharedInputs.Count} shared input(s)." +
+                Environment.NewLine + Environment.NewLine + Environment.NewLine);
         }
 
         // ===================================================================

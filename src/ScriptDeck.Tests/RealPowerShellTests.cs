@@ -244,6 +244,102 @@ namespace ScriptDeck.Tests
             Assert.Contains("\"A\":", all);
         }
 
+        [Fact]
+        public async Task RtbFormat_Raw_Renders_Format_Table_As_Text()
+        {
+            // The whole point of "raw": route output through Out-String
+            // -Stream so PowerShell's default formatter does its job. A
+            // Format-Table call should produce real tabular text in the
+            // RTB -- column headers, row data, and a dash separator --
+            // rather than the FormatStartData / FormatEntryData garbage
+            // you get without raw mode.
+            //
+            // FakeSink.Writes is a ConcurrentBag (no enumeration-order
+            // guarantee), so we assert on presence-of-substrings in the
+            // joined content, not specific ordering. The PS formatter
+            // chooses dash widths based on column width -- for our
+            // 1-char column "N" with single-digit values, dashes can
+            // be single ("-") not double ("--"), so we don't pin the
+            // exact dash count.
+            string body =
+                "1..2 | ForEach-Object { [PSCustomObject]@{ N=$_; X='hi' } } | " +
+                "Format-Table -AutoSize";
+            var (sink, _) = await RunAsync(BuildRequest(body, rtbFormat: "raw"));
+            string all = string.Join("", sink.Writes
+                .Where(w => w.Severity == "Output")
+                .Select(w => w.Text));
+
+            // Real table content -- headers AND row data both render:
+            Assert.Contains("N", all);
+            Assert.Contains("X", all);
+            Assert.Contains("hi", all);
+            // At least one dash appears (the header underline). One
+            // character is enough -- we just need to confirm a
+            // separator line was rendered, not its exact width.
+            Assert.Contains("-", all);
+
+            // The garbage shape that PROVES raw mode is engaged: if it
+            // weren't, the formatter directives would surface their
+            // CLR type names in obj.ToString() instead of rendered
+            // rows.
+            Assert.DoesNotContain("FormatStartData", all);
+            Assert.DoesNotContain("FormatEntryData", all);
+        }
+
+        [Fact]
+        public async Task RtbFormat_Raw_Preserves_Write_Grid_Routing()
+        {
+            // In raw mode, untagged structured objects flow through
+            // Out-String -Stream and never populate the grid. But
+            // Write-Grid stamps a __ScriptDeckTarget tag that the raw
+            // filter recognizes and bypasses, so the grid path still
+            // works for explicit emission.
+            string body =
+                "[PSCustomObject]@{ City='NYC'; Pop=8500000 } | Write-Grid; " +
+                "'should not become a grid row'";
+            var (sink, _) = await RunAsync(BuildRequest(body,
+                wantGrid: true, rtbFormat: "raw"));
+            // Grid got exactly the Write-Grid'd row, not the string.
+            Assert.Equal(new[] { "City", "Pop" }, sink.GridColumns);
+            Assert.Single(sink.GridRows);
+            Assert.Equal("NYC", sink.GridRows[0][0]);
+            // The untagged string went to the RTB via Out-String.
+            string all = string.Join("", sink.Writes
+                .Where(w => w.Severity == "Output")
+                .Select(w => w.Text));
+            Assert.Contains("should not become a grid row", all);
+        }
+
+        [Fact]
+        public async Task RtbFormat_Raw_Preserves_Set_SharedInput_Event()
+        {
+            // Set-SharedInput emits a __ScriptDeckSetSharedInput-tagged
+            // PSObject that the executor intercepts. The raw-mode
+            // filter must let that tag survive Out-String, or the
+            // bootstrap helper would silently stop working when a
+            // user flips a button to raw mode.
+            var fires = new List<(string Id, string Value, string Label)>();
+            void Handler(string id, string value, string label)
+            {
+                lock (fires) fires.Add((id, value, label));
+            }
+            _fx.Executor.SharedInputSetRequested += Handler;
+            try
+            {
+                await RunAsync(BuildRequest(
+                    "Set-SharedInput -Id 'rawkey' -Value 'rawval' -Label 'Raw Label'",
+                    rtbFormat: "raw"));
+            }
+            finally
+            {
+                _fx.Executor.SharedInputSetRequested -= Handler;
+            }
+            Assert.Single(fires);
+            Assert.Equal("rawkey",    fires[0].Id);
+            Assert.Equal("rawval",    fires[0].Value);
+            Assert.Equal("Raw Label", fires[0].Label);
+        }
+
         // ---- E. Shared input injection ----
 
         [Fact]

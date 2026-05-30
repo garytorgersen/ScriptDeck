@@ -38,6 +38,7 @@ namespace ScriptDeck.Forms
         private ToolStripMenuItem menu_Tools;
         private ToolStripMenuItem menu_Tools_RecentRuns;
         private ToolStripMenuItem menu_Tools_ScriptEditor;
+        private ToolStripMenuItem menu_Tools_EditBootstrap;
         private ToolStripSeparator menu_Tools_Sep0;
 
         // ---- Main content ----
@@ -68,13 +69,21 @@ namespace ScriptDeck.Forms
         private InputsGridPanel inputsGridPanel;
 
         // Toolbar between the tab strip and the output area.
-        // Houses a simple find-and-highlight box + two view toggles
-        // that collapse / expand the console and grid panels.
+        // Houses a simple find-and-highlight box, four small action
+        // buttons (clear/export console, export/popout grid), and two
+        // view toggles that collapse / expand the console and grid
+        // panels. Action buttons are 28x24 Segoe-MDL2-glyph buttons --
+        // tooltipped on hover to keep the strip compact.
         private Panel    panel_Toolbar;
         private Label    label_Search;
         private TextBox  textBox_Search;
         private System.Windows.Forms.Button   button_FindNext;
         private System.Windows.Forms.Button   button_ClearFind;
+        private System.Windows.Forms.Button   button_ClearConsole;
+        private System.Windows.Forms.Button   button_ExportConsole;
+        private System.Windows.Forms.Button   button_ExportGridCsv;
+        private System.Windows.Forms.Button   button_GridPopout;
+        private ToolTip  toolTip_Toolbar;
         private CheckBox checkBox_ShowConsole;
         private CheckBox checkBox_ShowGrid;
 
@@ -131,6 +140,7 @@ namespace ScriptDeck.Forms
             this.menu_Tools = new ToolStripMenuItem();
             this.menu_Tools_RecentRuns = new ToolStripMenuItem();
             this.menu_Tools_ScriptEditor = new ToolStripMenuItem();
+            this.menu_Tools_EditBootstrap = new ToolStripMenuItem();
             this.menu_Tools_Sep0 = new ToolStripSeparator();
 
             this.splitContainer_Outer = new SplitContainer();
@@ -152,6 +162,11 @@ namespace ScriptDeck.Forms
             this.textBox_Search      = new TextBox();
             this.button_FindNext     = new System.Windows.Forms.Button();
             this.button_ClearFind    = new System.Windows.Forms.Button();
+            this.button_ClearConsole = new System.Windows.Forms.Button();
+            this.button_ExportConsole = new System.Windows.Forms.Button();
+            this.button_ExportGridCsv = new System.Windows.Forms.Button();
+            this.button_GridPopout   = new System.Windows.Forms.Button();
+            this.toolTip_Toolbar     = new ToolTip();
             this.checkBox_ShowConsole = new CheckBox();
             this.checkBox_ShowGrid    = new CheckBox();
 
@@ -342,7 +357,8 @@ namespace ScriptDeck.Forms
             this.menu_Tools.DropDownItems.AddRange(new ToolStripItem[] {
                 this.menu_Tools_RecentRuns,
                 this.menu_Tools_Sep0,
-                this.menu_Tools_ScriptEditor
+                this.menu_Tools_ScriptEditor,
+                this.menu_Tools_EditBootstrap
             });
             this.menu_Tools.Name = "menu_Tools";
             this.menu_Tools.Text = "&Tools";
@@ -371,6 +387,20 @@ namespace ScriptDeck.Forms
             this.menu_Tools_ScriptEditor.Text = "&Script Editor...";
             this.menu_Tools_ScriptEditor.ShortcutKeys = Keys.F7;
             this.menu_Tools_ScriptEditor.Click += new System.EventHandler(this.menu_Tools_ScriptEditor_Click);
+            //
+            // menu_Tools_EditBootstrap
+            //
+            // Opens ScriptDeck.Bootstrap.ps1 (the file dot-sourced into
+            // every fresh runspace) in the same Script Editor used for
+            // workspace scripts. On close, if the file's mtime changed,
+            // the handler offers to reset the live PS runspaces so the
+            // edited helpers take effect without an app restart. Saving
+            // writes in-place; if the install lives in a write-protected
+            // location (e.g. Program Files), the editor's save will
+            // surface the OS error and nothing is reset.
+            this.menu_Tools_EditBootstrap.Name = "menu_Tools_EditBootstrap";
+            this.menu_Tools_EditBootstrap.Text = "Edit &Bootstrap Helper...";
+            this.menu_Tools_EditBootstrap.Click += new System.EventHandler(this.menu_Tools_EditBootstrap_Click);
 
             //
             // splitContainer_Outer — top: shared inputs band, bottom: everything else
@@ -430,6 +460,15 @@ namespace ScriptDeck.Forms
             // results grid; the toggles collapse one of them so the other
             // expands to fill the entire output area.
             this.panel_Toolbar.Dock = DockStyle.Top;
+            // Size pinned explicitly BEFORE anchored children are
+            // configured. Anchor=Top|Right captures the right-edge
+            // distance the moment the child's Anchor is set; if the
+            // panel's still at its default Panel size (200x100) at
+            // that moment, every right-anchored control ends up with
+            // a hugely negative right-distance and renders ~800px
+            // off-screen. Dock=Top + matching design width = correct
+            // anchor distances + correct runtime layout.
+            this.panel_Toolbar.Size = new System.Drawing.Size(1100, 32);
             this.panel_Toolbar.Height = 32;
             this.panel_Toolbar.BackColor = System.Drawing.SystemColors.Control;
             this.panel_Toolbar.Padding = new Padding(8, 4, 8, 4);
@@ -465,23 +504,89 @@ namespace ScriptDeck.Forms
             this.button_ClearFind.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             this.button_ClearFind.Click += new System.EventHandler(this.button_ClearFind_Click);
             //
+            // Console/grid action buttons -- 28x24 glyph buttons
+            // pinned to the right edge of the toolbar. Each shows a
+            // single Segoe MDL2 Assets glyph as Text; the actual
+            // meaning surfaces via toolTip_Toolbar on hover (kept
+            // terse so the strip stays compact). Same handlers are
+            // re-used by the right-click context menus on the RTB
+            // and grid.
+            //
+            // Layout (right-to-left): [Popout 1064] [CSV 1032]
+            // [Export console 1000] [Clear console 968]. The Show
+            // Console / Show Grid checkboxes sit just to their left
+            // (775 / 880). All anchored Top|Right with
+            // panel_Toolbar's design width pinned to 1100 above, so
+            // the anchor distances stay correct when the form is
+            // resized.
+            this.button_ClearConsole.Location = new System.Drawing.Point(968, 4);
+            this.button_ClearConsole.Size     = new System.Drawing.Size(28, 24);
+            this.button_ClearConsole.Font     = new System.Drawing.Font("Segoe MDL2 Assets", 10F);
+            this.button_ClearConsole.Text     = ""; // Delete (trash can)
+            this.button_ClearConsole.UseVisualStyleBackColor = true;
+            this.button_ClearConsole.Anchor   = AnchorStyles.Top | AnchorStyles.Right;
+            this.button_ClearConsole.TabStop  = false;
+            this.button_ClearConsole.Click   += new System.EventHandler(this.button_ClearConsole_Click);
+
+            this.button_ExportConsole.Location = new System.Drawing.Point(1000, 4);
+            this.button_ExportConsole.Size     = new System.Drawing.Size(28, 24);
+            this.button_ExportConsole.Font     = new System.Drawing.Font("Segoe MDL2 Assets", 10F);
+            this.button_ExportConsole.Text     = ""; // Save (disk)
+            this.button_ExportConsole.UseVisualStyleBackColor = true;
+            this.button_ExportConsole.Anchor   = AnchorStyles.Top | AnchorStyles.Right;
+            this.button_ExportConsole.TabStop  = false;
+            this.button_ExportConsole.Click   += new System.EventHandler(this.button_ExportConsole_Click);
+
+            this.button_ExportGridCsv.Location = new System.Drawing.Point(1032, 4);
+            this.button_ExportGridCsv.Size     = new System.Drawing.Size(28, 24);
+            this.button_ExportGridCsv.Font     = new System.Drawing.Font("Segoe MDL2 Assets", 10F);
+            this.button_ExportGridCsv.Text     = ""; // SaveAs (disk + arrow)
+            this.button_ExportGridCsv.UseVisualStyleBackColor = true;
+            this.button_ExportGridCsv.Anchor   = AnchorStyles.Top | AnchorStyles.Right;
+            this.button_ExportGridCsv.TabStop  = false;
+            this.button_ExportGridCsv.Click   += new System.EventHandler(this.button_ExportGridCsv_Click);
+
+            this.button_GridPopout.Location = new System.Drawing.Point(1064, 4);
+            this.button_GridPopout.Size     = new System.Drawing.Size(28, 24);
+            this.button_GridPopout.Font     = new System.Drawing.Font("Segoe MDL2 Assets", 10F);
+            this.button_GridPopout.Text     = ""; // OpenInNewWindow
+            this.button_GridPopout.UseVisualStyleBackColor = true;
+            this.button_GridPopout.Anchor   = AnchorStyles.Top | AnchorStyles.Right;
+            this.button_GridPopout.TabStop  = false;
+            this.button_GridPopout.Click   += new System.EventHandler(this.button_GridPopout_Click);
+
+            // Tooltips. 600ms initial show is the WinForms default; we
+            // keep it explicit so a future restyle doesn't accidentally
+            // disable hover hints.
+            this.toolTip_Toolbar.AutoPopDelay = 6000;
+            this.toolTip_Toolbar.InitialDelay = 500;
+            this.toolTip_Toolbar.ReshowDelay  = 200;
+            this.toolTip_Toolbar.SetToolTip(this.button_ClearConsole,  "Clear console text");
+            this.toolTip_Toolbar.SetToolTip(this.button_ExportConsole, "Export console text...");
+            this.toolTip_Toolbar.SetToolTip(this.button_ExportGridCsv, "Export grid to CSV...");
+            this.toolTip_Toolbar.SetToolTip(this.button_GridPopout,    "Open grid in a separate window");
+            //
             // checkBox_ShowConsole / checkBox_ShowGrid
             //
             // Both checked by default. The change handler enforces the
             // "at least one must be checked" invariant by silently re-
             // checking the box the user just unchecked when it would
             // have left zero panels visible.
+            // Shifted left to make room for the four glyph buttons
+            // that now anchor to the right edge. Reading order on the
+            // right side of the toolbar: [Show Console 775] [Show Grid
+            // 880] [Clear 968] [Export 1000] [CSV 1032] [Popout 1064].
             this.checkBox_ShowConsole.AutoSize = true;
             this.checkBox_ShowConsole.Checked = true;
             this.checkBox_ShowConsole.Text = "Show Console";
-            this.checkBox_ShowConsole.Location = new System.Drawing.Point(900, 7);
+            this.checkBox_ShowConsole.Location = new System.Drawing.Point(775, 7);
             this.checkBox_ShowConsole.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             this.checkBox_ShowConsole.CheckedChanged += new System.EventHandler(this.checkBox_ShowConsole_CheckedChanged);
 
             this.checkBox_ShowGrid.AutoSize = true;
             this.checkBox_ShowGrid.Checked = true;
             this.checkBox_ShowGrid.Text = "Show Grid";
-            this.checkBox_ShowGrid.Location = new System.Drawing.Point(1010, 7);
+            this.checkBox_ShowGrid.Location = new System.Drawing.Point(880, 7);
             this.checkBox_ShowGrid.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             this.checkBox_ShowGrid.CheckedChanged += new System.EventHandler(this.checkBox_ShowGrid_CheckedChanged);
 
@@ -489,6 +594,10 @@ namespace ScriptDeck.Forms
             this.panel_Toolbar.Controls.Add(this.textBox_Search);
             this.panel_Toolbar.Controls.Add(this.button_FindNext);
             this.panel_Toolbar.Controls.Add(this.button_ClearFind);
+            this.panel_Toolbar.Controls.Add(this.button_ClearConsole);
+            this.panel_Toolbar.Controls.Add(this.button_ExportConsole);
+            this.panel_Toolbar.Controls.Add(this.button_ExportGridCsv);
+            this.panel_Toolbar.Controls.Add(this.button_GridPopout);
             this.panel_Toolbar.Controls.Add(this.checkBox_ShowConsole);
             this.panel_Toolbar.Controls.Add(this.checkBox_ShowGrid);
             //

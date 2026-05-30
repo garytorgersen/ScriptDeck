@@ -730,7 +730,7 @@ fields can be absolute or relative; relative paths resolve against
 | `x`, `y`        | position (canvas-relative if no `groupId`, group-relative otherwise) |
 | `width`, `height` | 0 or omitted = defaults (150x36) |
 | `workingDirectory` | optional; relative paths resolve against `scriptsRoot` |
-| `rtbFormat`        | PowerShell-only. How structured records render in the console RTB. One of `default`, `list`, `table`, `json`. Omit / `null` = `default`. See `Running buttons -> RTB format`. |
+| `rtbFormat`        | PowerShell-only. How structured records render in the console RTB. One of `default`, `list`, `table`, `json`, or `raw` (script controls formatting; auto-grid disabled but `Write-Grid` still works -- see §12.6). Omit / `null` = `default`. See `Running buttons -> RTB format`. |
 | `runInBackground`  | bool. When true, clicking the button enqueues onto the background job queue (one worker, FIFO) instead of running on the foreground single-flight gate. Output appears in the Jobs tab. See §6 below. |
 
 **ButtonGroup** (a "label box")
@@ -849,10 +849,10 @@ inputs in this workspace)" hint.
 ### Format dropdown
 
 Editor-local override for the Run Test output format (same options as
-the per-button `rtbFormat`: `default` / `list` / `table` / `json`).
-Doesn't touch any saved button — purely steers what the in-dialog
-output pane shows. Useful for previewing how a script will render
-under different formats before committing one to the button.
+the per-button `rtbFormat`: `default` / `list` / `table` / `json` /
+`raw`). Doesn't touch any saved button — purely steers what the
+in-dialog output pane shows. Useful for previewing how a script will
+render under different formats before committing one to the button.
 
 ### Run / Cancel
 
@@ -1032,7 +1032,247 @@ no-ops. Check the LocalAppData path is reachable.
 
 ---
 
-## 12. Credits
+## 12. Recent additions (post-v0.1)
+
+Everything in this section was added after the initial v0.1 release. The
+earlier sections describe behavior that was stable at v0.1; this section
+describes what's new and how it interacts with that baseline.
+
+### 12.1 Volatile (session) shared inputs
+
+Workspaces have always had **shared inputs** -- the JSON-defined values
+that surface as the band of text boxes across the top of the window. These
+are now classified as **Static** inputs: they persist in the workspace
+file, render at the top, and are the same every time the workspace opens.
+
+Alongside them, ScriptDeck now tracks a parallel set of **Volatile**
+shared inputs that live only for the current session:
+
+- Created either by the user (Inputs grid → right-click → Add Volatile)
+  or by a script (`Set-SharedInput -Id ... -Value ...`)
+- Visible in the **Inputs grid** in the bottom-right corner of the main
+  window, alongside the workspace's Static inputs
+- Cleared automatically when the workspace is closed, switched, or the
+  app exits -- volatile state never survives a workspace boundary
+- Available to every script run via the same `{{name}}` token substitution
+  as Static inputs (and the script-side `$name` variable injection)
+
+**No-duplicates rule across scopes.** A given id can be Static *or*
+Volatile, but never both. The Add dialog refuses collisions with either
+side, and `Set-SharedInput` refuses to overwrite a Static id from inside
+a script (it throws an error visible in the console).
+
+**The Inputs grid** has three columns -- Name / Value / Scope -- and
+right-click context-menu entries:
+
+| Entry                | Effect                                                |
+|----------------------|-------------------------------------------------------|
+| Add Static…          | Opens a dialog to add a workspace-persisted input.    |
+| Add Volatile…        | Opens a dialog to add a session-only input.           |
+| Remove               | Drops the selected row (Static = workspace gets dirty).|
+| Clear All Volatile   | Wipes every Volatile row in one click.                |
+
+Volatile values are editable in place by clicking the Value cell. Static
+rows are read-only in the grid -- edit them via the top band as before.
+
+### 12.2 Bootstrap helpers: Set/Get/Remove-SharedInput
+
+Three new cmdlets are pre-imported into every script run:
+
+```powershell
+Set-SharedInput    -Id 'authToken' -Value 'abc123' -Label 'OAuth bearer'
+Get-SharedInput    -Id 'authToken'    # returns the value (sugar for $authToken)
+Get-SharedInput                       # bare: emits PSObjects with Id/Value/Scope
+Remove-SharedInput -Id 'authToken'
+```
+
+`Set-SharedInput` creates or updates a **Volatile** input -- you cannot
+overwrite a Static one. The new input is immediately visible in the
+Inputs grid and available to subsequent script runs.
+
+`Get-SharedInput` with `-Id` returns the value of that variable (which is
+already injected as `$<id>` by the executor, so `$authToken` and
+`Get-SharedInput -Id 'authToken'` are interchangeable). Without `-Id` it
+emits one PSObject per known input with `Id`, `Value`, and `Scope` (the
+string "Static" or "Volatile") properties -- useful for diagnostics.
+
+`Remove-SharedInput` deletes a Volatile id. Like Set, it refuses to touch
+Static ids (those belong to the workspace file and must be removed
+through the editor).
+
+These three helpers are the foundation for a planned **task-chains**
+feature where one button's output feeds the next button's input via
+session state.
+
+### 12.3 Output toolbar action buttons
+
+Four small glyph buttons live on the right edge of the output toolbar
+(between the visibility checkboxes and the right margin). All four are
+single-glyph Segoe MDL2 Assets icons with hover tooltips:
+
+| Glyph | Tooltip                                  | Action                                                                                                          |
+|-------|------------------------------------------|-----------------------------------------------------------------------------------------------------------------|
+| 🗑    | Clear console text                       | Empties the console RTB and any active Find highlights.                                                          |
+| 💾    | Export console text…                     | `SaveFileDialog` with `.txt` (plain) or `.rtf` (preserves green-on-black coloring) filters.                      |
+| 💾↗   | Export grid to CSV…                      | RFC-4180-quoted CSV, UTF-8 with BOM so Excel auto-detects encoding. Skips hidden columns; honors display order. |
+| 🪟    | Open grid in a separate window           | Snapshots the current grid contents into a new modeless **Grid-Out** window (see §12.4).                         |
+
+Each action has a matching entry in a right-click context menu on the
+relevant control:
+
+- **Console RTB** → right-click → *Clear console* / *Export console text…*
+- **Results grid** → right-click → *Export to CSV…* / *Open in new window*
+
+The menu items disable themselves on hover when the source is empty, so
+a click never silently no-ops.
+
+### 12.4 Grid-Out popout window
+
+Clicking the popout glyph (or right-click → Open in new window) snapshots
+the current grid into an independent, modeless window:
+
+- The snapshot is **frozen at open time** -- clearing or refilling the
+  main grid doesn't affect the popout
+- Multiple popouts allowed; the title bar shows the snapshot's row count
+  and capture timestamp so two windows are distinguishable in Alt+Tab
+- A bottom status bar shows `N rows, N columns -- captured YYYY-MM-DD HH:MM:SS`
+- An **Export CSV…** button on the popout's bottom panel lets a snapshot
+  be saved out even after the main grid has moved on
+- Esc closes the window
+
+Useful for keeping one result visible while running a different script,
+or comparing two query outputs side-by-side.
+
+### 12.5 RTB output spacing
+
+Two small UX polishes to the console RTB:
+
+1. **End-of-run separator** now writes two blank lines, the
+   `********…` divider, then two MORE blank lines below. Back-to-back
+   runs no longer crowd their first output up against the asterisks.
+
+2. **Workspace-loaded intro** (`Workspace 'X' loaded. N tab(s), …`) now
+   ends with two trailing blank lines so the first script-output line
+   doesn't visually slam into the intro text.
+
+Both changes affect the **console only**. The bottom Logs RTB stays
+dense by design -- the timestamped audit lines like `Loaded workspace:
+…` and `Added button: …` are unchanged.
+
+### 12.6 Raw RtbFormat mode
+
+The button-level `rtbFormat` field has a new value: **`raw`**. Selecting
+it hands console rendering entirely to PowerShell's default formatter.
+Use this when you want your script to fully control what appears in the
+RTB -- `Format-Table`, `Format-List`, custom whitespace, ASCII art, etc.
+
+Mechanically, raw mode appends a `ForEach-Object` filter to the executor's
+pipeline. The filter:
+
+- Lets **tagged** objects (`Write-Rtb` / `Write-Grid` /
+  `Set-SharedInput` / `Remove-SharedInput`) pass through verbatim, so
+  their tag-routing keeps working
+- Buffers all **untagged** objects and at script-end flushes them through
+  `Out-String -Stream`, which invokes the default formatter as a unit
+  (so `Format-Table` etc. render correctly -- per-object would break
+  the formatter's `StartData`/`EntryData`/`EndData` sequence)
+
+**What raw mode does NOT do:**
+
+- **Doesn't disable the grid.** `Write-Grid` still works -- explicit
+  grid output is supported. What *does* go away is **auto-population**
+  (untagged structured objects no longer become grid rows automatically).
+  If you want full-column grid output in raw mode, emit explicitly via
+  `Write-Grid`.
+- **Doesn't strip stream colors.** Errors are still red, Warnings yellow,
+  Info cyan. Color is a *classification*, not a *format*.
+- **Doesn't remove the end-of-run separator.** That's run-boundary
+  navigation, not user output.
+
+**Trade-off:** untagged output appears at script-completion rather than
+streaming live, because the buffer has to be flushed all at once for the
+formatter to render multi-record output coherently. Raw mode is opt-in --
+the user is asking for "PowerShell's default rendering," which inherently
+wants the full record set. For long-running scripts where you want to
+see output as it happens, leave `rtbFormat` at one of the streaming
+values (`default` / `list`).
+
+### 12.7 Removal of "Extended Grid Data" toggle
+
+The old per-button `extendedGridData` checkbox is gone. It was meant to
+include every property (including `PS*` engine metadata) in the grid and
+turn primitive output into single-column `Value` rows -- but it couldn't
+do what most users hoped (re-expand properties past a script-side
+`Select-Object`), because once `Select-Object` collapses an object the
+original is already gone before the executor sees it.
+
+In its place:
+
+- Grid output uses a curated user-property view (PS-engine metadata and
+  internal `__*` routing tags are filtered out automatically).
+- Primitives go to the RTB only, never the grid.
+- Scripts that want full-property grid output should emit unprojected
+  objects via `Write-Grid` and route the curated view to the RTB via
+  `Write-Rtb` (or use raw mode for full PS-default rendering -- §12.6).
+
+`extendedGridData` entries in existing workspace JSON files are silently
+ignored -- the field is dropped on next save.
+
+### 12.8 Group-button placement fix (under the hood)
+
+Cosmetic but visible: adding a button to a group (right-click a label
+box → *Add Button…*) used to drop every new button at the same
+hardcoded `(14, 28)` position. WinForms z-orders newer siblings to the
+back, so the new button was rendered *behind* the existing ones and
+appeared to silently not work. The placement now uses a free-spot search
+(matching the canvas-direct behavior), so successive Add-Button-to-group
+clicks step across the row.
+
+### 12.9 Edit the bootstrap helper from the app
+
+`ScriptDeck.Bootstrap.ps1` -- the file that ships next to
+`ScriptDeck.exe` and gets dot-sourced into every fresh PowerShell
+runspace -- can now be edited live from inside the app.
+
+**Tools → Edit Bootstrap Helper…** opens the file in the same Script
+Editor used for workspace scripts. When you close the dialog, if the
+file's modification time changed, ScriptDeck prompts:
+
+> *ScriptDeck.Bootstrap.ps1 was modified. Reload the PowerShell session
+> now so the updated helpers take effect?*
+
+Choosing **Yes** calls the same reset path that fires when you switch
+workspaces -- both PS runspaces (foreground and background) tear down,
+fresh ones open, and the bootstrap is re-dot-sourced. The next button
+click sees your updated helpers. **Any script currently running gets
+cancelled** -- that's the trade-off for not waiting on potentially
+long-running jobs.
+
+**Two caveats the dialog will warn you about up-front:**
+
+1. **Build output gets overwritten.** If you're running the EXE out of
+   `bin\Debug\net48\` or `bin\Release\net48\` (typical for in-development
+   testing), the next rebuild copies the source-tree `src\ScriptDeck\
+   ScriptDeck.Bootstrap.ps1` over your in-app edits. For permanent
+   changes, edit the source file directly. ScriptDeck detects this case
+   and shows an info dialog before opening the editor.
+
+2. **Write-protected installs.** If ScriptDeck is installed under
+   `Program Files`, the Script Editor's save will fail with an OS
+   "access denied" error. There's no UAC elevation -- copy the file
+   to a writable location, edit, and copy back, or run the EXE
+   elevated for that session.
+
+The Save-and-reload cycle is non-destructive in the sense that the file
+is the only state changed: if you break the bootstrap (syntax error,
+deleted helper), the next script run surfaces a clear warning
+("ScriptDeck.Bootstrap.ps1 reported errors loading: …") via the
+deferred-warning latch in `PowerShellExecutor.TryRunBootstrap`. Restore
+the file (or rebuild from source) to recover.
+
+---
+
+## 13. Credits
 
 ScriptDeck stands on these third-party libraries:
 

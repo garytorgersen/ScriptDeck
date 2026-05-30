@@ -202,7 +202,11 @@ namespace ScriptDeck.Forms
             //
             // PowerShell-only. Controls how structured records render in
             // the console RTB ("default" = obj.ToString(); list/table/json/csv
-            // produce friendlier text). Has no effect on the grid output.
+            // produce friendlier text; "raw" hands console rendering
+            // entirely to PowerShell's default formatter so Format-Table
+            // / Format-List / custom whitespace render as the script
+            // wrote them, and disables auto-grid-population -- Write-Grid
+            // still works in raw mode for explicit grid output).
             this.label_RtbFormat.AutoSize = true;
             this.label_RtbFormat.Location = new System.Drawing.Point(12, 55);
             this.label_RtbFormat.Text = "RTB format:";
@@ -210,7 +214,7 @@ namespace ScriptDeck.Forms
             this.comboBox_RtbFormat.Width = 130;
             this.comboBox_RtbFormat.DropDownStyle = ComboBoxStyle.DropDownList;
             this.comboBox_RtbFormat.Items.AddRange(new object[] {
-                "default", "list", "table", "json"
+                "default", "list", "table", "json", "raw"
             });
             //
             // checkBox_Confirm

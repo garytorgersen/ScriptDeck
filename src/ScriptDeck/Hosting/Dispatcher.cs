@@ -286,17 +286,21 @@ namespace ScriptDeck.Hosting
                 }
 
                 // Visual separator between commands in the console RTB.
-                // Two blank lines then a row of asterisks — gives the eye
-                // an unambiguous boundary when several runs land back-to-
-                // back. Goes ONLY to the output stream (not the logs RTB
-                // or the grid) so it doesn't pollute structured outputs.
-                // Best-effort: a sink failure here mustn't escape the
-                // finally and mask the original result.
+                // Two blank lines, a row of asterisks, then two MORE
+                // blank lines below -- gives the eye an unambiguous
+                // boundary AND a quiet zone before the next run starts
+                // writing, so back-to-back clicks don't visually crowd
+                // their output up against the asterisks. Goes ONLY to
+                // the output stream (not the logs RTB or the grid) so
+                // it doesn't pollute structured outputs. Best-effort:
+                // a sink failure here mustn't escape the finally and
+                // mask the original result.
                 try
                 {
                     runSink.WriteOutput(
                         Environment.NewLine + Environment.NewLine +
-                        new string('*', SeparatorWidth) + Environment.NewLine);
+                        new string('*', SeparatorWidth) + Environment.NewLine +
+                        Environment.NewLine + Environment.NewLine);
                 }
                 catch { /* swallow */ }
 
