@@ -60,6 +60,14 @@ namespace ScriptDeck.Forms
         // Recent Workspaces submenu on demand.
         private RecentWorkspaces _recentWorkspaces;
 
+        // User-managed list of computer names backing the dropdown
+        // shown for shared inputs whose normalize == "computerName".
+        // Persists to %LocalAppData%\ScriptDeck\computers.json. The
+        // WorkspaceRenderer holds a reference and re-points its combo
+        // boxes when this store fires Changed (after Tools -> Manage
+        // Computers saves).
+        private ComputerListStore _computerList;
+
         // Phase 7: top-level menus rendered from MenuDefinition entries.
         // We track the inserted ToolStripMenuItems separately so reload /
         // close / edit cycles can remove them cleanly without touching
@@ -130,6 +138,13 @@ namespace ScriptDeck.Forms
             // LocalAppData won't crash the Shell.
             _recentWorkspaces = new RecentWorkspaces();
 
+            // Computer list. Loaded from %LocalAppData%\ScriptDeck\
+            // computers.json; if the file is missing or malformed the
+            // store presents an empty list. Edited via
+            // Tools -> Manage Computers; consumed by the renderer when
+            // it sees a shared input with normalize == "computerName".
+            _computerList = new ComputerListStore();
+
             // Dispatcher owns the executors. The PowerShell runspace
             // inside PowerShellExecutor opens here and stays open until
             // Dispose. Long-lived host pattern: open the runspace once
@@ -173,7 +188,8 @@ namespace ScriptDeck.Forms
                 panel_SharedInputs,
                 tabControl_Workspace,
                 tabPage_Welcome,
-                OnWorkspaceButtonClicked);
+                OnWorkspaceButtonClicked,
+                _computerList);
 
             // Edit-mode wiring. The renderer fires events when the user
             // picks a context-menu item; Shell mutates the workspace
@@ -1244,6 +1260,20 @@ namespace ScriptDeck.Forms
                 ?? (string.IsNullOrEmpty(_activeWorkspacePath) ? null : Path.GetDirectoryName(_activeWorkspacePath));
             using (var dlg = new ScriptEditorDialog(_dispatcher, scriptsRoot, initialPath: null,
                                                     sharedInputs: BuildSharedInputSnapshot()))
+            {
+                dlg.ShowDialog(this);
+            }
+        }
+
+        private void menu_Tools_ManageComputers_Click(object sender, EventArgs e)
+        {
+            // Modal dialog over the Shell. ComputerListStore.Save fires
+            // its Changed event from within the dialog's Save handler,
+            // which the WorkspaceRenderer subscribes to -- so any
+            // computerName combo boxes refresh in place by the time the
+            // dialog returns. No explicit re-render needed here.
+            if (_computerList == null) return;
+            using (var dlg = new ManageComputersDialog(_computerList))
             {
                 dlg.ShowDialog(this);
             }
@@ -2382,7 +2412,15 @@ namespace ScriptDeck.Forms
                 if (s == null || string.IsNullOrEmpty(s.Id)) continue;
                 if (!result.TryGetValue(s.Id, out var current)) continue;
 
-                if (string.Equals(s.Normalize, "computerName", StringComparison.OrdinalIgnoreCase))
+                // computerName fields: explicit Normalize is the canonical
+                // opt-in; id=="computerName" is an implicit fallback so a
+                // workspace that lost the normalize hint (JSON round-trip
+                // dropping null fields, hand-edits, etc.) still gets the
+                // same runtime resolution as the renderer's display path.
+                bool isComputerNameField =
+                    string.Equals(s.Normalize, "computerName", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(s.Id,    "computerName", StringComparison.OrdinalIgnoreCase);
+                if (isComputerNameField)
                 {
                     if (string.IsNullOrWhiteSpace(current)
                         || string.Equals(current, ".",         StringComparison.OrdinalIgnoreCase)

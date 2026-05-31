@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
+using ScriptDeck.Hosting;
 using ScriptDeck.Workspace;
 
 // Workspace.Button collides with WinForms.Button. Alias once at the top of
@@ -65,10 +66,14 @@ namespace ScriptDeck.Forms
         private readonly TabPage _welcomeTab;
         private readonly Action<WsButton> _onButtonClick;
 
-        // Map shared-input id -> TextBox so the dispatcher can pull the
-        // current values for token substitution at click time.
-        private readonly Dictionary<string, TextBox> _sharedInputs =
-            new Dictionary<string, TextBox>(StringComparer.OrdinalIgnoreCase);
+        // Map shared-input id -> control (TextBox by default, ComboBox
+        // for normalize=="computerName" inputs that source from the
+        // ComputerListStore). Control is the common base; .Text works
+        // on both, which is all the dispatcher's value-snapshot code
+        // needs. Picking Control over a Func<string> wrapper keeps the
+        // refactor footprint tiny.
+        private readonly Dictionary<string, Control> _sharedInputs =
+            new Dictionary<string, Control>(StringComparer.OrdinalIgnoreCase);
 
         // Track the currently rendered workspace model so context menu
         // handlers can find the parent Tab of a button by reference, and
@@ -134,16 +139,41 @@ namespace ScriptDeck.Forms
         /// </summary>
         public event Action LayoutCommitted;
 
+        // Optional ScriptDeck-wide computer list. Drives the dropdown
+        // shown for any shared input with normalize == "computerName".
+        // When null, the renderer falls back to a plain TextBox so the
+        // renderer remains usable without the store (tests, headless
+        // callers, etc.).
+        private readonly ComputerListStore _computerList;
+
+        // Currently-live computerName ComboBoxes, keyed by SharedInput.Id.
+        // Tracked so the ComputerListStore.Changed handler can re-point
+        // each combo's items list in place when the user adds / removes
+        // computers via Tools -> Manage Computers, without forcing a
+        // full re-render of the workspace (which would lose any value
+        // the user has manually typed).
+        private readonly System.Collections.Generic.Dictionary<string, ComboBox> _computerCombos =
+            new System.Collections.Generic.Dictionary<string, ComboBox>(StringComparer.OrdinalIgnoreCase);
+
         public WorkspaceRenderer(
             FlowLayoutPanel sharedInputsPanel,
             TabControl tabControl,
             TabPage welcomeTab,
             Action<WsButton> onButtonClick)
+            : this(sharedInputsPanel, tabControl, welcomeTab, onButtonClick, computerList: null) { }
+
+        public WorkspaceRenderer(
+            FlowLayoutPanel sharedInputsPanel,
+            TabControl tabControl,
+            TabPage welcomeTab,
+            Action<WsButton> onButtonClick,
+            ComputerListStore computerList)
         {
             _sharedInputsPanel = sharedInputsPanel ?? throw new ArgumentNullException(nameof(sharedInputsPanel));
             _tabControl        = tabControl        ?? throw new ArgumentNullException(nameof(tabControl));
             _welcomeTab        = welcomeTab        ?? throw new ArgumentNullException(nameof(welcomeTab));
             _onButtonClick     = onButtonClick     ?? throw new ArgumentNullException(nameof(onButtonClick));
+            _computerList      = computerList; // optional
 
             // Tab drag-reorder. Subscribed once at construction (the
             // TabControl outlives every render cycle) so we don't have to
@@ -153,6 +183,64 @@ namespace ScriptDeck.Forms
             _tabControl.MouseDown += OnTabStripMouseDown;
             _tabControl.MouseMove += OnTabStripMouseMove;
             _tabControl.MouseUp   += OnTabStripMouseUp;
+
+            // Re-populate live combo items when the user edits the
+            // computer list via Tools -> Manage Computers. Subscribed
+            // once at construction; ComputerListStore outlives this
+            // renderer for the lifetime of the app.
+            if (_computerList != null)
+                _computerList.Changed += OnComputerListChanged;
+        }
+
+        private void OnComputerListChanged()
+        {
+            // Marshal to the UI thread because the store can technically
+            // fire Changed off any thread (Save in the dialog is on UI
+            // today, but future callers might not be).
+            if (_sharedInputsPanel.InvokeRequired)
+            {
+                _sharedInputsPanel.BeginInvoke(new Action(OnComputerListChanged));
+                return;
+            }
+            foreach (var combo in _computerCombos.Values)
+                RepopulateComputerCombo(combo);
+        }
+
+        // Build [magic entries] + [user list] and assign to a combo's
+        // Items collection in place. Preserves the current Text so the
+        // user's typed-in value survives the refresh.
+        private void RepopulateComputerCombo(ComboBox combo)
+        {
+            if (combo == null || combo.IsDisposed) return;
+            string preserved = combo.Text;
+            combo.BeginUpdate();
+            try
+            {
+                combo.Items.Clear();
+                foreach (var magic in MagicComputerEntries())
+                    combo.Items.Add(magic);
+                if (_computerList != null)
+                {
+                    foreach (var c in _computerList.GetAll())
+                        combo.Items.Add(c);
+                }
+            }
+            finally
+            {
+                combo.EndUpdate();
+            }
+            combo.Text = preserved;
+        }
+
+        // Universally-useful "pseudo-machine" tokens pinned at the top
+        // of every computerName dropdown. Each resolves to the local box
+        // at runtime via the existing normalize=="computerName" pipeline,
+        // so the user never has to add these manually.
+        private static System.Collections.Generic.IEnumerable<string> MagicComputerEntries()
+        {
+            yield return ".";
+            yield return "localhost";
+            yield return "%COMPUTERNAME%";
         }
 
         /// <summary>
@@ -223,6 +311,11 @@ namespace ScriptDeck.Forms
                 c.Dispose();
             }
             _sharedInputs.Clear();
+            // The dispose loop above kills the combo controls; clearing
+            // the tracking dict drops dead references so the next
+            // ComputerListStore.Changed event doesn't try to repopulate
+            // a disposed combo.
+            _computerCombos.Clear();
 
             foreach (TabPage tp in _tabControl.TabPages.Cast<TabPage>().ToArray())
             {
@@ -264,21 +357,69 @@ namespace ScriptDeck.Forms
                 // from the moment the workspace loads. Workspace JSON
                 // stays portable across machines — each box fills in its
                 // own name. Any other Default value passes through verbatim.
+                //
+                // Detection: explicit normalize=="computerName" is the
+                // canonical opt-in, AND we treat id=="computerName" as
+                // an implicit fallback so workspaces that lost or never
+                // set the normalize hint (e.g. a JSON round-trip that
+                // dropped null fields, a user copying a sample without
+                // realizing) still get the dropdown + machine-name
+                // resolution. The id name is a strong convention and
+                // matches the only token most users care about.
                 string initialText = input.Default ?? string.Empty;
-                if (string.Equals(input.Normalize, "computerName", StringComparison.OrdinalIgnoreCase)
-                    && IsLocalSentinel(initialText))
+                bool isComputerNameField =
+                    string.Equals(input.Normalize, "computerName", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(input.Id,    "computerName", StringComparison.OrdinalIgnoreCase);
+                if (isComputerNameField && IsLocalSentinel(initialText))
                 {
                     initialText = Environment.MachineName;
                 }
 
-                var box = new TextBox
+                // computerName fields render as an editable ComboBox
+                // sourced from the ComputerListStore (+ pinned magic
+                // entries like "." and "localhost"). All other inputs
+                // stay as plain TextBoxes. The ComboBox is editable
+                // (DropDownStyle=DropDown) so manual entry of any
+                // hostname / IP still works -- the dropdown is just a
+                // pick-list shortcut.
+                Control box;
+                if (isComputerNameField)
                 {
-                    Name = "shared_" + input.Id,
-                    Text = initialText,
-                    Width = 180,
-                    Font = new Font("Consolas", 9.5F),
-                    Location = new Point(label.PreferredWidth + 6, 4),
-                };
+                    var combo = new ComboBox
+                    {
+                        Name = "shared_" + input.Id,
+                        Text = initialText,
+                        Width = 180,
+                        Font = new Font("Consolas", 9.5F),
+                        Location = new Point(label.PreferredWidth + 6, 4),
+                        DropDownStyle      = ComboBoxStyle.DropDown,
+                        AutoCompleteMode   = AutoCompleteMode.SuggestAppend,
+                        AutoCompleteSource = AutoCompleteSource.ListItems,
+                        // Cap visible rows at 5 (default is 8). Past that
+                        // the dropdown scrolls -- keeps a long managed
+                        // list from eating most of the screen, and makes
+                        // the dropdown's resting size predictable.
+                        MaxDropDownItems   = 5,
+                    };
+                    RepopulateComputerCombo(combo);
+                    // Restore the initial text AFTER populating (the
+                    // populate path preserves Text, but assigning Items
+                    // can sometimes nudge it).
+                    combo.Text = initialText;
+                    _computerCombos[input.Id] = combo;
+                    box = combo;
+                }
+                else
+                {
+                    box = new TextBox
+                    {
+                        Name = "shared_" + input.Id,
+                        Text = initialText,
+                        Width = 180,
+                        Font = new Font("Consolas", 9.5F),
+                        Location = new Point(label.PreferredWidth + 6, 4),
+                    };
+                }
 
                 pair.Controls.Add(label);
                 pair.Controls.Add(box);

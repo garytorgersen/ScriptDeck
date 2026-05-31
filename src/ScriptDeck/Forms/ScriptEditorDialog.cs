@@ -290,9 +290,15 @@ namespace ScriptDeck.Forms
                 string val = row.Cells["Value"].Value?.ToString() ?? string.Empty;
 
                 // Apply normalize rule (same as Shell.NormalizeSharedInputs).
+                // Detection mirrors WorkspaceRenderer + Shell: explicit
+                // Normalize is canonical, id=="computerName" is the
+                // implicit fallback so workspaces missing the hint still
+                // get the same resolution behavior here.
                 var snap = row.Tag as SharedInputSnapshot;
-                if (snap != null
-                    && string.Equals(snap.Normalize, "computerName", StringComparison.OrdinalIgnoreCase))
+                bool isComputerNameField = snap != null && (
+                    string.Equals(snap.Normalize, "computerName", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(snap.Id,    "computerName", StringComparison.OrdinalIgnoreCase));
+                if (isComputerNameField)
                 {
                     if (string.IsNullOrWhiteSpace(val)
                         || string.Equals(val, ".",         StringComparison.OrdinalIgnoreCase)

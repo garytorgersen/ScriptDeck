@@ -39,6 +39,7 @@ namespace ScriptDeck.Forms
         private ToolStripMenuItem menu_Tools_RecentRuns;
         private ToolStripMenuItem menu_Tools_ScriptEditor;
         private ToolStripMenuItem menu_Tools_EditBootstrap;
+        private ToolStripMenuItem menu_Tools_ManageComputers;
         private ToolStripSeparator menu_Tools_Sep0;
 
         // ---- Main content ----
@@ -141,6 +142,7 @@ namespace ScriptDeck.Forms
             this.menu_Tools_RecentRuns = new ToolStripMenuItem();
             this.menu_Tools_ScriptEditor = new ToolStripMenuItem();
             this.menu_Tools_EditBootstrap = new ToolStripMenuItem();
+            this.menu_Tools_ManageComputers = new ToolStripMenuItem();
             this.menu_Tools_Sep0 = new ToolStripSeparator();
 
             this.splitContainer_Outer = new SplitContainer();
@@ -358,7 +360,8 @@ namespace ScriptDeck.Forms
                 this.menu_Tools_RecentRuns,
                 this.menu_Tools_Sep0,
                 this.menu_Tools_ScriptEditor,
-                this.menu_Tools_EditBootstrap
+                this.menu_Tools_EditBootstrap,
+                this.menu_Tools_ManageComputers
             });
             this.menu_Tools.Name = "menu_Tools";
             this.menu_Tools.Text = "&Tools";
@@ -401,6 +404,18 @@ namespace ScriptDeck.Forms
             this.menu_Tools_EditBootstrap.Name = "menu_Tools_EditBootstrap";
             this.menu_Tools_EditBootstrap.Text = "Edit &Bootstrap Helper...";
             this.menu_Tools_EditBootstrap.Click += new System.EventHandler(this.menu_Tools_EditBootstrap_Click);
+            //
+            // menu_Tools_ManageComputers
+            //
+            // ScriptDeck-wide list of computer names backing the
+            // dropdown rendered for any shared input with
+            // normalize=="computerName". Stored as JSON at
+            // %LocalAppData%\ScriptDeck\computers.json. Manage is the
+            // only edit surface -- the dropdown itself is select-or-
+            // type, never edit-the-list.
+            this.menu_Tools_ManageComputers.Name = "menu_Tools_ManageComputers";
+            this.menu_Tools_ManageComputers.Text = "&Manage Computers...";
+            this.menu_Tools_ManageComputers.Click += new System.EventHandler(this.menu_Tools_ManageComputers_Click);
 
             //
             // splitContainer_Outer — top: shared inputs band, bottom: everything else

@@ -1270,6 +1270,96 @@ deleted helper), the next script run surfaces a clear warning
 deferred-warning latch in `PowerShellExecutor.TryRunBootstrap`. Restore
 the file (or rebuild from source) to recover.
 
+### 12.10 Managed computer list (Tools → Manage Computers)
+
+ScriptDeck now maintains a ScriptDeck-wide list of computer names that
+backs the dropdown rendered for any shared input whose `normalize` rule
+is `computerName`. The list is per-user (`%LocalAppData%\ScriptDeck\
+computers.json`), shared across every workspace you open.
+
+**Behavior in the shared-inputs band:**
+
+For a workspace input like
+
+```jsonc
+{
+  "id": "computerName",
+  "label": "Computer Name",
+  "type": "text",
+  "default": ".",
+  "normalize": "computerName"
+}
+```
+
+the field renders as an editable ComboBox (not a plain TextBox):
+
+- The dropdown lists every entry from the managed list, alphabetically
+- Three "magic" entries are pinned at the top regardless: `.` /
+  `localhost` / `%COMPUTERNAME%` (each of which resolves to the local
+  box via the existing `computerName` normalization)
+- **Manual entry still works** — type any hostname, FQDN, or IP and it
+  goes through unchanged
+- Auto-complete suggests matching entries as you type (`SuggestAppend`)
+
+The dropdown is **select-or-type only** — you can't add/edit/remove
+entries from the field itself. Editing is exclusively via the Tools
+menu, by design (the dropdown stays "clean" and the list is the one
+source of truth).
+
+**Tools → Manage Computers** opens a dialog where you can:
+
+| Action | Behavior |
+|---|---|
+| Add… | Single-field prompt; case-insensitive duplicate check refuses redundancies |
+| Edit | Renames the selected entry; duplicate check applies to the new name |
+| Remove | Drops one or more selected entries |
+| Import from text file… | Reads a `.txt` (or `.lst` / `.csv`) — one name per line; lines starting with `#` are comments, blank lines and whitespace are ignored, duplicates dedupe silently. Status text shows "Imported N new; M already existed". |
+| Save | Persists to `computers.json` and refreshes every visible computer-name combo in place (preserves any value you've typed but not committed) |
+| Cancel | Discards changes; disk file and live combos untouched |
+
+**Import file format:**
+
+```
+# Servers
+web01.corp.local
+db01.corp.local
+
+# Workstations
+laptop-gtw
+
+# IPs are fine too
+192.168.1.50
+```
+
+This is import-only — Save writes a clean alphabetized JSON envelope,
+not the comments-and-blanks format. The on-disk shape is:
+
+```json
+{
+  "version": 1,
+  "computers": [
+    "192.168.1.50",
+    "db01.corp.local",
+    "laptop-gtw",
+    "web01.corp.local"
+  ]
+}
+```
+
+The `version` field is a forward-compatibility hook; future schema
+evolution (per-entry tags, descriptions, etc.) will bump it and the
+loader will branch accordingly.
+
+**Failure modes:**
+
+- Missing file → empty list (Tools → Manage Computers populates it on
+  first Save)
+- Malformed JSON → empty list silently; first Save overwrites with a
+  clean envelope
+- Save IO failure (write-protected `%LocalAppData%`, full disk) →
+  warning dialog with the OS error message; in-memory list keeps the
+  edits for the session but they won't survive an app restart
+
 ---
 
 ## 13. Credits

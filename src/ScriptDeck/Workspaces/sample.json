@@ -8,7 +8,7 @@
       "Label": "Computer Name",
       "Type": "text",
       "Default": ".",
-      "Normalize": null
+      "Normalize": "computerName"
     }
   ],
   "Tabs": [
