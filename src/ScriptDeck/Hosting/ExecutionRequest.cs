@@ -45,6 +45,16 @@ namespace ScriptDeck.Hosting
         public string RtbFormat { get; set; }
 
         /// <summary>
+        /// Python-only: full path to the python interpreter to spawn.
+        /// The dispatcher applies the precedence
+        /// <c>Button.PythonInterpreter -> Workspace.PythonInterpreter ->
+        /// (null)</c> and stamps the resolved value here. Null or empty
+        /// means "use bare 'python' from PATH". Has no effect for
+        /// non-Python executors.
+        /// </summary>
+        public string PythonInterpreter { get; set; }
+
+        /// <summary>
         /// When true, dispatch routes the request through the background
         /// job queue (one worker, FIFO) instead of the foreground
         /// single-flight gate. Foreground and background can run

@@ -163,6 +163,7 @@ namespace ScriptDeck.Forms
             var psBg  = new PowerShellExecutor();
             var cmd   = new CmdExecutor();
             var proc  = new ProcessExecutor();
+            var py    = new PythonExecutor();
             // Both PS executors push session-input mutations through the
             // Shell's session dict. A script run in foreground OR in a
             // background job can equally call Set-SharedInput; either
@@ -172,10 +173,16 @@ namespace ScriptDeck.Forms
             psFg.SharedInputRemoveRequested += OnSessionInputRemoveRequested;
             psBg.SharedInputSetRequested    += OnSessionInputSetRequested;
             psBg.SharedInputRemoveRequested += OnSessionInputRemoveRequested;
+            // PythonExecutor's tag events are static (single subscription
+            // covers both fg + bg) -- python is one-shot so a single
+            // instance handles both paths; the events are on the type
+            // itself, not the instance.
+            PythonExecutor.SharedInputSetRequested    += OnSessionInputSetRequested;
+            PythonExecutor.SharedInputRemoveRequested += OnSessionInputRemoveRequested;
             _dispatcher = new Dispatcher(
                 Sink,
-                executors:           new IExecutor[] { psFg, cmd, proc },
-                backgroundExecutors: new IExecutor[] { psBg, cmd, proc },
+                executors:           new IExecutor[] { psFg, cmd, proc, py },
+                backgroundExecutors: new IExecutor[] { psBg, cmd, proc, py },
                 history:             _runHistory);
             _dispatcher.BusyChanged += OnDispatcherBusyChanged;
             if (_dispatcher.BackgroundQueue != null)
@@ -2386,6 +2393,13 @@ namespace ScriptDeck.Forms
                 // helpers' duplicate detection.
                 StaticInputIds = staticIds,
                 RtbFormat    = btn.RtbFormat,
+                // Python interpreter precedence: per-button override
+                // wins; otherwise fall through to the workspace default;
+                // otherwise null (executor uses bare "python" on PATH).
+                // Non-Python executors ignore this field entirely.
+                PythonInterpreter = !string.IsNullOrWhiteSpace(btn.PythonInterpreter)
+                    ? btn.PythonInterpreter
+                    : _activeWorkspace?.PythonInterpreter,
             };
         }
 

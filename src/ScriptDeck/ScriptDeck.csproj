@@ -74,6 +74,14 @@
     <Content Include="ScriptDeck.Bootstrap.ps1">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+
+    <!-- Python bootstrap module. PythonExecutor prepends
+         AppContext.BaseDirectory to PYTHONPATH so scripts can
+         `import scriptdeck_bootstrap` with no extra setup. Like the
+         PS1 above, must land next to the EXE (not a subfolder). -->
+    <Content Include="scriptdeck_bootstrap.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

@@ -483,8 +483,15 @@ namespace ScriptDeck.Forms
             // a hugely negative right-distance and renders ~800px
             // off-screen. Dock=Top + matching design width = correct
             // anchor distances + correct runtime layout.
-            this.panel_Toolbar.Size = new System.Drawing.Size(1100, 32);
-            this.panel_Toolbar.Height = 32;
+            //
+            // Height: 60 for a two-row layout. Top row holds the
+            // search controls (left) and four glyph action buttons
+            // (right); bottom row holds the Show Console / Show Grid
+            // checkboxes under the icons. The previous single-row
+            // layout put the checkboxes next to the icons but their
+            // AutoSized widths overlapped at common DPIs.
+            this.panel_Toolbar.Size = new System.Drawing.Size(1100, 60);
+            this.panel_Toolbar.Height = 60;
             this.panel_Toolbar.BackColor = System.Drawing.SystemColors.Control;
             this.panel_Toolbar.Padding = new Padding(8, 4, 8, 4);
             //
@@ -587,21 +594,29 @@ namespace ScriptDeck.Forms
             // "at least one must be checked" invariant by silently re-
             // checking the box the user just unchecked when it would
             // have left zero panels visible.
-            // Shifted left to make room for the four glyph buttons
-            // that now anchor to the right edge. Reading order on the
-            // right side of the toolbar: [Show Console 775] [Show Grid
-            // 880] [Clear 968] [Export 1000] [CSV 1032] [Popout 1064].
+            // Second row: checkboxes positioned under the glyph icons
+            // (icons sit at y=4, height 24 -> bottom edge y=28; second
+            // row starts at y=34 with a small 6px gap). Show Console
+            // sits roughly under the leftmost two icons, Show Grid
+            // under the rightmost two. Both right-anchored so they
+            // track the icons when the form resizes.
+            //
+            // x-coordinates picked so AutoSized text widths
+            // ("Show Console" ~95px, "Show Grid" ~75px at 9pt Segoe UI)
+            // don't overlap at any practical DPI: 30px gap between the
+            // end of Show Console and the start of Show Grid even when
+            // both expand under font rendering quirks.
             this.checkBox_ShowConsole.AutoSize = true;
             this.checkBox_ShowConsole.Checked = true;
             this.checkBox_ShowConsole.Text = "Show Console";
-            this.checkBox_ShowConsole.Location = new System.Drawing.Point(775, 7);
+            this.checkBox_ShowConsole.Location = new System.Drawing.Point(900, 34);
             this.checkBox_ShowConsole.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             this.checkBox_ShowConsole.CheckedChanged += new System.EventHandler(this.checkBox_ShowConsole_CheckedChanged);
 
             this.checkBox_ShowGrid.AutoSize = true;
             this.checkBox_ShowGrid.Checked = true;
             this.checkBox_ShowGrid.Text = "Show Grid";
-            this.checkBox_ShowGrid.Location = new System.Drawing.Point(880, 7);
+            this.checkBox_ShowGrid.Location = new System.Drawing.Point(1015, 34);
             this.checkBox_ShowGrid.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             this.checkBox_ShowGrid.CheckedChanged += new System.EventHandler(this.checkBox_ShowGrid_CheckedChanged);
 

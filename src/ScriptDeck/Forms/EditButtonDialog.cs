@@ -81,6 +81,12 @@ namespace ScriptDeck.Forms
             checkBox_Log.Checked     = source.Log;
             checkBox_RunInBackground.Checked = source.RunInBackground;
 
+            // Python interpreter override. Empty when the workspace
+            // default (or PATH) is fine. Always hydrated even when the
+            // executor isn't python so a user can flip executors back
+            // and forth without losing the value.
+            textBox_PythonInterpreter.Text = source.PythonInterpreter ?? string.Empty;
+
             // RTB format: select the saved value if it matches an item;
             // otherwise default to "default" (the legacy behavior). This
             // way an unrecognized value (future format we don't know
@@ -89,6 +95,50 @@ namespace ScriptDeck.Forms
             string fmt = string.IsNullOrWhiteSpace(source.RtbFormat) ? "default" : source.RtbFormat.Trim().ToLowerInvariant();
             int idx = comboBox_RtbFormat.Items.IndexOf(fmt);
             comboBox_RtbFormat.SelectedIndex = idx >= 0 ? idx : 0;
+
+            // Show/hide the Python interpreter row based on current
+            // executor. Also wire the change handler so flipping the
+            // executor dropdown toggles the row.
+            UpdatePythonRowVisibility();
+            comboBox_Executor.TextChanged += (_, __) => UpdatePythonRowVisibility();
+        }
+
+        private void UpdatePythonRowVisibility()
+        {
+            bool isPython = string.Equals(
+                (comboBox_Executor.Text ?? string.Empty).Trim(),
+                "python", StringComparison.OrdinalIgnoreCase);
+            label_PythonInterpreter.Visible   = isPython;
+            textBox_PythonInterpreter.Visible = isPython;
+            button_BrowsePython.Visible       = isPython;
+        }
+
+        private void Button_BrowsePython_Click(object sender, EventArgs e)
+        {
+            // Filter favors python.exe but allows any file in case the
+            // user wants a stub launcher / shim (e.g. pyenv-win shim).
+            using (var dlg = new OpenFileDialog
+            {
+                Title           = "Select Python interpreter",
+                Filter          = "Python executable (python*.exe)|python*.exe|All files (*.*)|*.*",
+                CheckFileExists = true,
+            })
+            {
+                // Seed from existing value if any (so reopening lands
+                // back in the same folder).
+                if (!string.IsNullOrWhiteSpace(textBox_PythonInterpreter.Text))
+                {
+                    try
+                    {
+                        var dir = System.IO.Path.GetDirectoryName(textBox_PythonInterpreter.Text);
+                        if (!string.IsNullOrEmpty(dir) && System.IO.Directory.Exists(dir))
+                            dlg.InitialDirectory = dir;
+                    }
+                    catch { /* invalid path -- ignore seeding */ }
+                }
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                    textBox_PythonInterpreter.Text = dlg.FileName;
+            }
         }
 
         /// <summary>
@@ -119,6 +169,14 @@ namespace ScriptDeck.Forms
             target.Confirm = checkBox_Confirm.Checked;
             target.Log     = checkBox_Log.Checked;
             target.RunInBackground = checkBox_RunInBackground.Checked;
+
+            // Persist the python interpreter override only when the
+            // executor is python AND a value was supplied. Storing it
+            // for non-python executors would just clutter the JSON.
+            bool isPython = string.Equals(
+                target.Executor, "python", StringComparison.OrdinalIgnoreCase);
+            string py = textBox_PythonInterpreter.Text?.Trim();
+            target.PythonInterpreter = (isPython && !string.IsNullOrEmpty(py)) ? py : null;
 
             // RTB format: persist null when "default" is selected so the
             // JSON stays minimal for buttons that didn't opt in. Skip

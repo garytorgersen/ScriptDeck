@@ -27,6 +27,18 @@ namespace ScriptDeck.Workspace
         public IList<SharedInput> SharedInputs { get; set; } = new List<SharedInput>();
         public IList<Tab> Tabs { get; set; } = new List<Tab>();
         public IList<MenuDefinition> Menus { get; set; } = new List<MenuDefinition>();
+
+        /// <summary>
+        /// Workspace-level default Python interpreter path. Used by every
+        /// Python button in this workspace unless the button sets its own
+        /// <see cref="Button.PythonInterpreter"/> override. Null / empty
+        /// falls through to bare "python" (resolved via the user's PATH).
+        ///
+        /// Most commonly points at a virtualenv's python.exe
+        /// (<c>C:\projects\foo\.venv\Scripts\python.exe</c>) so all the
+        /// workspace's Python buttons share dependency pinning.
+        /// </summary>
+        public string PythonInterpreter { get; set; }
     }
 
     /// <summary>
@@ -170,6 +182,19 @@ namespace ScriptDeck.Workspace
         /// run simultaneously; further background submissions queue.
         /// </summary>
         public bool RunInBackground { get; set; }
+
+        /// <summary>
+        /// Python-only: per-button override of the Python interpreter
+        /// path. When set, the executor spawns this exact file (typically
+        /// a venv's <c>python.exe</c>) instead of the workspace-level
+        /// default or the system <c>python</c> on PATH. Resolution
+        /// precedence: this property -> Workspace.PythonInterpreter ->
+        /// bare "python" (PATH lookup). Null/empty falls through to the
+        /// next layer.
+        ///
+        /// Has no effect for executors other than python.
+        /// </summary>
+        public string PythonInterpreter { get; set; }
 
         // ---- Positioning ----
         // Coordinates are pixels. When GroupId is set, X/Y are RELATIVE

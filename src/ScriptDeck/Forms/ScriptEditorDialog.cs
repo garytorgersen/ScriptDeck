@@ -170,28 +170,49 @@ namespace ScriptDeck.Forms
                 }
             };
 
-            // Lexer: ScintillaNET's PowerShell lexer is the natural fit.
-            // We set keyword set 0 (cmdlets / language keywords) and let
-            // the rest fall back to default style. Style ids come from
-            // Style.PowerShell.* in ScintillaNET.
+            // Lexer + keyword + style setup is language-dependent. We
+            // probe the open file's extension once at construction to
+            // decide. Switching languages mid-session (the user does
+            // not get an Open/Save-As that retargets the editor in v1)
+            // isn't supported -- close + reopen to switch.
+            if (IsPythonPath(_currentPath))
+                ConfigurePythonLexer(s);
+            else
+                ConfigurePowerShellLexer(s);
+
+            // Brace match colors apply to BOTH languages (language-
+            // neutral Scintilla styles). Lives here after the lexer
+            // dispatch so it isn't accidentally scoped to one lexer.
+            s.Styles[Style.BraceLight].ForeColor = Color.LimeGreen;
+            s.Styles[Style.BraceLight].Bold      = true;
+            s.Styles[Style.BraceBad].ForeColor   = Color.Red;
+            s.Styles[Style.BraceBad].Bold        = true;
+        }
+
+        private static bool IsPythonPath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            return path.EndsWith(".py",  StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".pyw", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void ConfigurePowerShellLexer(ScintillaNET.Scintilla s)
+        {
+            // ScintillaNET's PowerShell lexer is the natural fit. We
+            // set keyword set 0 (language keywords) and 1 (common
+            // cmdlet verbs) and let the rest fall back to default style.
             s.Lexer = Lexer.PowerShell;
             s.SetKeywords(0,
                 "if else elseif while do for foreach in switch break continue " +
                 "return throw try catch finally function param begin process end " +
                 "filter class enum hidden static public private using module " +
                 "trap data dynamicparam exit");
-            // Keyword set 1 = common cmdlet verbs so noun completion looks
-            // approximately right out of the box. Not exhaustive on purpose;
-            // users can tweak in the bootstrap if they care to.
             s.SetKeywords(1,
                 "Get Set New Remove Add Clear Find Format Out " +
                 "Import Export ConvertFrom ConvertTo Invoke Start Stop Restart " +
                 "Test Update Write Read Select Where ForEach Sort Group Measure " +
                 "Enable Disable Resolve Search");
 
-            // Color the lexer-emitted styles. PowerShell lexer style ids
-            // live under Style.PowerShell.*. Pick high-contrast colors
-            // that read on the default white background.
             s.Styles[Style.PowerShell.Default].ForeColor       = Color.Black;
             s.Styles[Style.PowerShell.Comment].ForeColor       = Color.FromArgb(0, 128, 0);
             s.Styles[Style.PowerShell.String].ForeColor        = Color.FromArgb(163, 21, 21);
@@ -207,12 +228,51 @@ namespace ScriptDeck.Forms
             s.Styles[Style.PowerShell.HereString].ForeColor    = Color.FromArgb(163, 21, 21);
             s.Styles[Style.PowerShell.HereCharacter].ForeColor = Color.FromArgb(163, 21, 21);
             s.Styles[Style.PowerShell.CommentDocKeyword].ForeColor = Color.FromArgb(0, 96, 160);
+        }
 
-            // Brace match colors: green for matched, red for mismatched.
-            s.Styles[Style.BraceLight].ForeColor = Color.LimeGreen;
-            s.Styles[Style.BraceLight].Bold = true;
-            s.Styles[Style.BraceBad].ForeColor = Color.Red;
-            s.Styles[Style.BraceBad].Bold = true;
+        private static void ConfigurePythonLexer(ScintillaNET.Scintilla s)
+        {
+            // ScintillaNET's Python lexer covers keywords, strings,
+            // triple-quoted strings, numbers, decorators, and class /
+            // def headers. Style ids live under Style.Python.*.
+            s.Lexer = Lexer.Python;
+
+            // Keyword set 0 = language keywords (full PEP 3131 list as
+            // of Python 3.12). Set 1 = common builtins + types so
+            // print / len / dict / etc. read as identifiers, not
+            // generic names. The lexer doesn't bind these to a
+            // separate style on every build, but providing both makes
+            // ScintillaNET's word-classifier behave correctly.
+            s.SetKeywords(0,
+                "False None True and as assert async await break class continue " +
+                "def del elif else except finally for from global if import in is " +
+                "lambda nonlocal not or pass raise return try while with yield match case");
+            s.SetKeywords(1,
+                "abs all any bin bool bytes callable chr classmethod compile complex " +
+                "dict dir divmod enumerate eval exec filter float format frozenset " +
+                "getattr globals hasattr hash help hex id input int isinstance issubclass " +
+                "iter len list locals map max memoryview min next object oct open ord " +
+                "pow print property range repr reversed round set setattr slice sorted " +
+                "staticmethod str sum super tuple type vars zip __import__ self cls");
+
+            s.Styles[Style.Python.Default].ForeColor          = Color.Black;
+            s.Styles[Style.Python.CommentLine].ForeColor      = Color.FromArgb(0, 128, 0);
+            s.Styles[Style.Python.Number].ForeColor           = Color.FromArgb(0, 0, 200);
+            s.Styles[Style.Python.String].ForeColor           = Color.FromArgb(163, 21, 21);
+            s.Styles[Style.Python.Character].ForeColor        = Color.FromArgb(163, 21, 21);
+            s.Styles[Style.Python.Word].ForeColor             = Color.Blue;   // keywords
+            s.Styles[Style.Python.Triple].ForeColor           = Color.FromArgb(163, 21, 21);
+            s.Styles[Style.Python.TripleDouble].ForeColor     = Color.FromArgb(163, 21, 21);
+            s.Styles[Style.Python.ClassName].ForeColor        = Color.FromArgb(0, 96, 160);
+            s.Styles[Style.Python.ClassName].Bold             = true;
+            s.Styles[Style.Python.DefName].ForeColor          = Color.FromArgb(0, 96, 160);
+            s.Styles[Style.Python.DefName].Bold               = true;
+            s.Styles[Style.Python.Operator].ForeColor         = Color.FromArgb(80, 80, 80);
+            s.Styles[Style.Python.Identifier].ForeColor       = Color.Black;
+            s.Styles[Style.Python.CommentBlock].ForeColor     = Color.FromArgb(0, 128, 0);
+            s.Styles[Style.Python.StringEol].ForeColor        = Color.Red;
+            s.Styles[Style.Python.Word2].ForeColor            = Color.FromArgb(0, 96, 160); // builtins
+            s.Styles[Style.Python.Decorator].ForeColor        = Color.FromArgb(128, 0, 128);
         }
 
         private static bool IsBraceChar(int c) =>
@@ -374,6 +434,16 @@ namespace ScriptDeck.Forms
 
         private void RunSyntaxCheck()
         {
+            // For Python files we shell out to `python -c "import ast; ..."`
+            // because there's no in-process Python parser on net48. For
+            // PowerShell we use the existing ScriptValidator (which uses
+            // System.Management.Automation's parser in-process).
+            if (IsPythonPath(_currentPath))
+            {
+                RunPythonSyntaxCheck();
+                return;
+            }
+
             var issues = ScriptValidator.Validate(scintilla_Editor.Text);
             if (issues.Count == 0)
             {
@@ -391,6 +461,74 @@ namespace ScriptDeck.Forms
             statusLabel_Syntax.ForeColor = Color.Firebrick;
         }
 
+        // Python syntax check via `python -c "import ast; ast.parse(...)"`.
+        // Best-effort: if python isn't on PATH we surface a soft "not
+        // checked" status rather than fail the editor. Stdin is the
+        // editor text, avoiding a scratch file.
+        private void RunPythonSyntaxCheck()
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName               = "python",
+                    Arguments              = "-c \"import sys, ast\nast.parse(sys.stdin.read())\"",
+                    UseShellExecute        = false,
+                    RedirectStandardInput  = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError  = true,
+                    CreateNoWindow         = true,
+                };
+                using (var p = System.Diagnostics.Process.Start(psi))
+                {
+                    if (p == null)
+                    {
+                        statusLabel_Syntax.Text = "Syntax: not checked (no interpreter)";
+                        statusLabel_Syntax.ForeColor = SystemColors.GrayText;
+                        return;
+                    }
+                    p.StandardInput.Write(scintilla_Editor.Text);
+                    p.StandardInput.Close();
+                    if (!p.WaitForExit(3000))
+                    {
+                        try { p.Kill(); } catch { }
+                        statusLabel_Syntax.Text = "Syntax: check timed out";
+                        statusLabel_Syntax.ForeColor = Color.Firebrick;
+                        return;
+                    }
+
+                    if (p.ExitCode == 0)
+                    {
+                        statusLabel_Syntax.Text = "Syntax: OK";
+                        statusLabel_Syntax.ForeColor = SystemColors.ControlText;
+                        return;
+                    }
+
+                    // SyntaxError on stderr: last line is the most
+                    // actionable ("SyntaxError: ..."). Show that + try
+                    // to extract a line number from the traceback.
+                    string err = p.StandardError.ReadToEnd() ?? string.Empty;
+                    string firstError = err.Split(new[] { '\r', '\n' },
+                                                  StringSplitOptions.RemoveEmptyEntries)
+                                            .LastOrDefault() ?? "(unknown)";
+                    statusLabel_Syntax.Text = "Syntax: " + Truncate(firstError, 120);
+                    statusLabel_Syntax.ForeColor = Color.Firebrick;
+                }
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                // python.exe not on PATH. Don't treat as an error; the
+                // user can still run via the configured interpreter.
+                statusLabel_Syntax.Text = "Syntax: not checked (python not on PATH)";
+                statusLabel_Syntax.ForeColor = SystemColors.GrayText;
+            }
+            catch (Exception ex)
+            {
+                statusLabel_Syntax.Text = "Syntax: check failed -- " + Truncate(ex.Message, 100);
+                statusLabel_Syntax.ForeColor = Color.Firebrick;
+            }
+        }
+
         private static string Truncate(string s, int max)
         {
             if (string.IsNullOrEmpty(s)) return s;
@@ -405,25 +543,34 @@ namespace ScriptDeck.Forms
         {
             if (_testRunning) return;
 
-            // Refuse to run if there are syntax errors -- saves the user
-            // from getting a "ParserError" dump in the output pane and
-            // lets them fix the editor first.
-            var issues = ScriptValidator.Validate(scintilla_Editor.Text);
-            if (issues.Count > 0)
+            bool isPython = IsPythonPath(_currentPath);
+
+            // Refuse to run if there are syntax errors. For PowerShell
+            // we have ScriptValidator (in-process AST parser). For
+            // Python we skip the pre-flight check because spawning a
+            // separate `python -c ast.parse` adds startup cost on
+            // every Run; the executor itself will surface SyntaxError
+            // on stderr if the user has one.
+            if (!isPython)
             {
-                richTextBox_Output.Clear();
-                _testSink.WriteError(
-                    $"Refusing to run: {issues.Count} syntax error(s).\r\n" +
-                    $"  Line {issues[0].Line}, Col {issues[0].Column}: {issues[0].Message}\r\n");
-                return;
+                var issues = ScriptValidator.Validate(scintilla_Editor.Text);
+                if (issues.Count > 0)
+                {
+                    richTextBox_Output.Clear();
+                    _testSink.WriteError(
+                        $"Refusing to run: {issues.Count} syntax error(s).\r\n" +
+                        $"  Line {issues[0].Line}, Col {issues[0].Column}: {issues[0].Message}\r\n");
+                    return;
+                }
             }
 
-            // Write the editor text to a scratch file so the existing
-            // PowerShellExecutor (which expects a .ps1 path) can run it
-            // unchanged. Using a stable filename keeps debugging easier
-            // than per-run guids and avoids accumulating temp files.
+            // Write the editor text to a scratch file so the executor
+            // can run it. Extension matches the language so the
+            // executor + any shebang-style behavior do the right thing
+            // (scratch.ps1 for PowerShell, scratch.py for Python).
             string scratchDir = Path.Combine(Path.GetTempPath(), "ScriptDeck");
-            string scratchPath = Path.Combine(scratchDir, "scratch.ps1");
+            string scratchPath = Path.Combine(scratchDir,
+                isPython ? "scratch.py" : "scratch.ps1");
             try
             {
                 Directory.CreateDirectory(scratchDir);
@@ -464,7 +611,7 @@ namespace ScriptDeck.Forms
                     RtbFormat     = string.Equals(format, "default", StringComparison.OrdinalIgnoreCase) ? null : format,
                 };
 
-                await _dispatcher.ExecuteAsync(req, "powershell", _testSink).ConfigureAwait(true);
+                await _dispatcher.ExecuteAsync(req, isPython ? "python" : "powershell", _testSink).ConfigureAwait(true);
             }
             catch (Exception ex)
             {

@@ -21,6 +21,12 @@ namespace ScriptDeck.Forms
         private Label label_ArgsHint;
         private Label label_WorkingDir;
         private TextBox textBox_WorkingDir;
+        // Python-only override row. Visible only when Executor=="python".
+        // null/empty falls through to Workspace.PythonInterpreter, then
+        // to bare "python" on PATH.
+        private Label label_PythonInterpreter;
+        private TextBox textBox_PythonInterpreter;
+        private System.Windows.Forms.Button button_BrowsePython;
         private GroupBox groupBox_Outputs;
         private CheckBox checkBox_OutputRtb;
         private CheckBox checkBox_OutputGrid;
@@ -56,6 +62,9 @@ namespace ScriptDeck.Forms
             this.label_ArgsHint      = new Label();
             this.label_WorkingDir    = new Label();
             this.textBox_WorkingDir  = new TextBox();
+            this.label_PythonInterpreter   = new Label();
+            this.textBox_PythonInterpreter = new TextBox();
+            this.button_BrowsePython       = new System.Windows.Forms.Button();
             this.groupBox_Outputs    = new GroupBox();
             this.checkBox_OutputRtb  = new CheckBox();
             this.checkBox_OutputGrid = new CheckBox();
@@ -104,7 +113,7 @@ namespace ScriptDeck.Forms
             this.comboBox_Executor.Location = new System.Drawing.Point(110, 72);
             this.comboBox_Executor.Width = 200;
             this.comboBox_Executor.DropDownStyle = ComboBoxStyle.DropDownList;
-            this.comboBox_Executor.Items.AddRange(new object[] { "powershell", "cmd", "process" });
+            this.comboBox_Executor.Items.AddRange(new object[] { "powershell", "cmd", "process", "python" });
             //
             // label_ScriptPath
             //
@@ -173,12 +182,34 @@ namespace ScriptDeck.Forms
             this.textBox_WorkingDir.Location = new System.Drawing.Point(110, 247);
             this.textBox_WorkingDir.Width = 360;
             //
+            // label_PythonInterpreter / textBox_PythonInterpreter / button_BrowsePython
+            //
+            // Per-button override row for the Python interpreter path.
+            // Visible only when Executor == "python" (toggle managed in
+            // the .cs file via OnExecutorChanged). Null/empty -> falls
+            // through to Workspace.PythonInterpreter, then bare "python".
+            this.label_PythonInterpreter.AutoSize = true;
+            this.label_PythonInterpreter.Location = new System.Drawing.Point(12, 281);
+            this.label_PythonInterpreter.Text = "Python:";
+            this.label_PythonInterpreter.Visible = false;
+            this.textBox_PythonInterpreter.Location = new System.Drawing.Point(110, 278);
+            this.textBox_PythonInterpreter.Width = 280;
+            this.textBox_PythonInterpreter.Visible = false;
+            this.button_BrowsePython.Location = new System.Drawing.Point(396, 276);
+            this.button_BrowsePython.Size = new System.Drawing.Size(70, 24);
+            this.button_BrowsePython.Text = "Browse...";
+            this.button_BrowsePython.UseVisualStyleBackColor = true;
+            this.button_BrowsePython.Visible = false;
+            this.button_BrowsePython.Click += new System.EventHandler(this.Button_BrowsePython_Click);
+            //
             // groupBox_Outputs
             //
             // Holds the destination toggles plus the RTB-format combo
             // (since both affect how output is presented). Compact box
-            // -- two checkboxes and one labelled combobox row.
-            this.groupBox_Outputs.Location = new System.Drawing.Point(12, 280);
+            // -- two checkboxes and one labelled combobox row. Shifted
+            // 30px down to make room for the (sometimes-visible) Python
+            // interpreter row above.
+            this.groupBox_Outputs.Location = new System.Drawing.Point(12, 310);
             this.groupBox_Outputs.Size = new System.Drawing.Size(458, 90);
             this.groupBox_Outputs.Text = "Output destinations";
             this.groupBox_Outputs.Controls.Add(this.checkBox_OutputRtb);
@@ -220,13 +251,13 @@ namespace ScriptDeck.Forms
             // checkBox_Confirm
             //
             this.checkBox_Confirm.AutoSize = true;
-            this.checkBox_Confirm.Location = new System.Drawing.Point(15, 405);
+            this.checkBox_Confirm.Location = new System.Drawing.Point(15, 435);
             this.checkBox_Confirm.Text = "Prompt before running (good for destructive scripts)";
             //
             // checkBox_Log
             //
             this.checkBox_Log.AutoSize = true;
-            this.checkBox_Log.Location = new System.Drawing.Point(15, 429);
+            this.checkBox_Log.Location = new System.Drawing.Point(15, 459);
             this.checkBox_Log.Text = "Write start/done lines to log";
             //
             // checkBox_RunInBackground
@@ -235,12 +266,12 @@ namespace ScriptDeck.Forms
             // background job queue instead of running on the foreground
             // single-flight gate. Output appears in the Jobs tab.
             this.checkBox_RunInBackground.AutoSize = true;
-            this.checkBox_RunInBackground.Location = new System.Drawing.Point(15, 453);
+            this.checkBox_RunInBackground.Location = new System.Drawing.Point(15, 483);
             this.checkBox_RunInBackground.Text = "Run in background (long-running -- output appears in Jobs tab)";
             //
             // button_Ok
             //
-            this.button_Ok.Location = new System.Drawing.Point(295, 489);
+            this.button_Ok.Location = new System.Drawing.Point(295, 519);
             this.button_Ok.Size = new System.Drawing.Size(85, 28);
             this.button_Ok.Text = "OK";
             this.button_Ok.UseVisualStyleBackColor = true;
@@ -249,7 +280,7 @@ namespace ScriptDeck.Forms
             //
             // button_Cancel
             //
-            this.button_Cancel.Location = new System.Drawing.Point(385, 489);
+            this.button_Cancel.Location = new System.Drawing.Point(385, 519);
             this.button_Cancel.Size = new System.Drawing.Size(85, 28);
             this.button_Cancel.Text = "Cancel";
             this.button_Cancel.UseVisualStyleBackColor = true;
@@ -259,7 +290,7 @@ namespace ScriptDeck.Forms
             //
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(484, 530);
+            this.ClientSize = new System.Drawing.Size(484, 560);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
@@ -284,6 +315,9 @@ namespace ScriptDeck.Forms
             this.Controls.Add(this.label_ArgsHint);
             this.Controls.Add(this.label_WorkingDir);
             this.Controls.Add(this.textBox_WorkingDir);
+            this.Controls.Add(this.label_PythonInterpreter);
+            this.Controls.Add(this.textBox_PythonInterpreter);
+            this.Controls.Add(this.button_BrowsePython);
             this.Controls.Add(this.groupBox_Outputs);
             this.Controls.Add(this.checkBox_Confirm);
             this.Controls.Add(this.checkBox_Log);

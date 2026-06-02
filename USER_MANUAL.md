@@ -1360,6 +1360,92 @@ loader will branch accordingly.
   warning dialog with the OS error message; in-memory list keeps the
   edits for the session but they won't survive an app restart
 
+### 12.11 Python support
+
+`python` is now a first-class button executor alongside `powershell`,
+`cmd`, and `process`. A Python button runs the script as a one-shot
+subprocess (each click spawns a fresh `python.exe`); the model is the
+same as `cmd` -- session state doesn't persist between runs.
+
+**Interpreter selection.** Three layers, precedence highest-to-lowest:
+
+1. **Per-button override** -- `Button.PythonInterpreter` (set via the
+   Edit Button dialog's *Python:* field when executor is `python`).
+   Typical use: pin a button to a specific venv:
+   `C:\projects\foo\.venv\Scripts\python.exe`.
+2. **Workspace default** -- `Workspace.PythonInterpreter` in the JSON
+   root. Shared by every Python button in the workspace.
+3. **PATH fallback** -- bare `python` if both above are unset.
+
+Each layer can be null/empty to defer to the next.
+
+**Bootstrap module** -- `scriptdeck_bootstrap.py` ships next to
+`ScriptDeck.exe` and is added to `PYTHONPATH` automatically, so any
+button script can:
+
+```python
+from scriptdeck_bootstrap import (
+    write_rtb, write_grid,
+    set_shared_input, get_shared_input, remove_shared_input,
+    is_local_target, inputs,
+)
+```
+
+The helpers mirror the PowerShell bootstrap one-to-one:
+
+| Python helper                          | PowerShell equivalent      | What it does |
+|----------------------------------------|----------------------------|---|
+| `write_rtb(value)`                     | `Write-Rtb`                | Route a string to the console RTB only. |
+| `write_grid(rows)`                     | `Write-Grid`               | Append one dict (or list of dicts) as grid rows. First record pins the column set. |
+| `set_shared_input(id, value, label?)`  | `Set-SharedInput`          | Create / update a Volatile shared input. Refuses Static ids (raises `ValueError`). |
+| `get_shared_input(id?)`                | `Get-SharedInput`          | Return one value, or the full inputs dict if no id. |
+| `remove_shared_input(id)`              | `Remove-SharedInput`       | Drop a Volatile shared input. Refuses Static ids. |
+| `is_local_target(name)`                | `Test-IsLocalTarget`       | True when the name is `.` / `localhost` / `%COMPUTERNAME%` / empty. |
+| `inputs` (module attribute)            | `$ScriptDeckInputs` (PS)   | Read-only snapshot of every shared input dict. |
+
+**Output protocol** -- the executor watches stdout for lines starting
+with the sentinel `__SCRIPTDECK_JSON__`. Each such line is one JSON
+event (RTB-route, grid-append, set/remove-shared-input). The bootstrap
+helpers above emit these for you; ordinary `print()` output bypasses
+the tag mechanism and goes to the console RTB as plain text. Stderr
+always routes to the sink's Error stream (red in the console).
+
+**Shared inputs** -- published as individual environment variables
+(`os.environ['computerName']`) AND as a typed dict via the bootstrap
+module's `inputs` attribute. Same `{{token}}` substitution as the
+other executors works in the button's `args`.
+
+**Encoding** -- the executor sets `PYTHONIOENCODING=utf-8` and forces
+UTF-8 on the redirected stdout/stderr streams, so `print('café')`
+works without `chcp` hacks.
+
+**Script Editor** -- opens `.py` files with the Python lexer
+(syntax highlighting for keywords, strings, decorators, class/def
+headers, etc.) and a syntax checker that shells out to
+`python -c "import ast; ast.parse(sys.stdin.read())"`. The Run Test
+button writes to a `scratch.py` and dispatches through the same
+PythonExecutor used at run time -- you preview exactly what a button
+click will produce. If `python` isn't on PATH the syntax-check
+silently falls back to "not checked" rather than failing the editor.
+
+**Sample** -- the bundled sample workspace's Tools tab now has a
+**Python Info** button running `scripts/Get-PythonInfo.py`. It
+demonstrates: `print()` to the console, `write_grid()` populating the
+results grid with interpreter metadata, and `set_shared_input()`
+creating a `lastPythonRun` Volatile input you can see appear in the
+Inputs grid.
+
+**What's NOT supported in v1:**
+
+- No long-lived runspace -- each click is a fresh subprocess. State
+  set by one click does not persist to the next. (Use Volatile shared
+  inputs via `set_shared_input` for cross-click state.)
+- No tab-completion / linting (mypy, pylint) in the editor.
+- `requirements.txt` auto-install is not part of ScriptDeck; manage
+  your venvs externally and point the interpreter override at them.
+- Interactive `input()` / stdin prompts will hang -- there's no host
+  UI to satisfy them.
+
 ---
 
 ## 13. Credits
