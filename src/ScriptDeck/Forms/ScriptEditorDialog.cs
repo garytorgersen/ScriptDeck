@@ -196,6 +196,24 @@ namespace ScriptDeck.Forms
                 || path.EndsWith(".pyw", StringComparison.OrdinalIgnoreCase);
         }
 
+        // Re-applies the lexer + keyword sets + style colors to match
+        // the current _currentPath's extension. Used when the open file
+        // changes after construction (Browse to a different file, Save
+        // As crossing a .ps1 <-> .py boundary). Does NOT touch margins,
+        // font, brace-match colors, etc. -- those are set once in
+        // ConfigureScintilla and never need to change.
+        private void ReapplyLexerForCurrentPath()
+        {
+            if (IsPythonPath(_currentPath))
+                ConfigurePythonLexer(scintilla_Editor);
+            else
+                ConfigurePowerShellLexer(scintilla_Editor);
+            // Force a colorise pass over the whole buffer so the new
+            // styles render immediately rather than only on the next
+            // edit.
+            scintilla_Editor.Colorize(0, scintilla_Editor.TextLength);
+        }
+
         private static void ConfigurePowerShellLexer(ScintillaNET.Scintilla s)
         {
             // ScintillaNET's PowerShell lexer is the natural fit. We
@@ -675,22 +693,46 @@ namespace ScriptDeck.Forms
 
         private void Button_SaveAs_Click(object sender, EventArgs e)
         {
+            // Bias the dialog to whatever language the editor is
+            // currently holding. If the user is editing a .py, default
+            // to .py; otherwise .ps1. The combined filter ("Script
+            // files") is listed first so a user picking from either
+            // language sees the full set without scrolling.
+            bool curIsPython = IsPythonPath(_currentPath);
             using (var dlg = new SaveFileDialog
             {
                 Title = "Save Script As",
-                Filter = "PowerShell scripts (*.ps1)|*.ps1|All files (*.*)|*.*",
-                DefaultExt = "ps1",
+                Filter = "Script files (*.ps1;*.py)|*.ps1;*.py|"
+                       + "PowerShell scripts (*.ps1)|*.ps1|"
+                       + "Python scripts (*.py)|*.py|"
+                       + "All files (*.*)|*.*",
+                // FilterIndex is 1-based. Picks the matching single-
+                // extension filter so the OS suggested-extension UX
+                // (which uses the current filter, not DefaultExt) is
+                // right for the current file's language.
+                FilterIndex = curIsPython ? 3 : 2,
+                DefaultExt = curIsPython ? "py" : "ps1",
                 AddExtension = true,
                 OverwritePrompt = true,
                 InitialDirectory = !string.IsNullOrEmpty(_scriptsRoot) && Directory.Exists(_scriptsRoot)
                     ? _scriptsRoot
                     : (string.IsNullOrEmpty(_currentPath) ? null : Path.GetDirectoryName(_currentPath)),
-                FileName = string.IsNullOrEmpty(_currentPath) ? "NewScript.ps1" : Path.GetFileName(_currentPath),
+                FileName = string.IsNullOrEmpty(_currentPath)
+                    ? (curIsPython ? "NewScript.py" : "NewScript.ps1")
+                    : Path.GetFileName(_currentPath),
             })
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 if (TrySave(dlg.FileName))
                 {
+                    // If the user saved across languages (.ps1 -> .py
+                    // or vice versa), retarget the editor's lexer so
+                    // highlighting matches the new file's language.
+                    if (IsPythonPath(dlg.FileName) != IsPythonPath(_currentPath))
+                    {
+                        _currentPath = dlg.FileName;
+                        ReapplyLexerForCurrentPath();
+                    }
                     // Mark the dialog as "successful save happened" so
                     // the parent (e.g. EditButtonDialog) can read
                     // SavedPath afterwards. We DON'T close on Save -- the
@@ -709,7 +751,10 @@ namespace ScriptDeck.Forms
             using (var dlg = new OpenFileDialog
             {
                 Title = "Open Script",
-                Filter = "PowerShell scripts (*.ps1)|*.ps1|All files (*.*)|*.*",
+                Filter = "Script files (*.ps1;*.py)|*.ps1;*.py|"
+                       + "PowerShell scripts (*.ps1)|*.ps1|"
+                       + "Python scripts (*.py)|*.py|"
+                       + "All files (*.*)|*.*",
                 CheckFileExists = true,
                 InitialDirectory = !string.IsNullOrEmpty(_scriptsRoot) && Directory.Exists(_scriptsRoot)
                     ? _scriptsRoot
@@ -720,6 +765,13 @@ namespace ScriptDeck.Forms
                 _currentPath = dlg.FileName;
                 textBox_Path.Text = _currentPath;
                 LoadInitialContent();
+                // Critical when switching languages mid-session: the
+                // ctor-time ConfigureScintilla decided the lexer based
+                // on the path the dialog was opened with. Re-pointing
+                // the editor at a different file means re-applying the
+                // correct lexer + keyword set, or .py code shows up
+                // with PowerShell highlighting (and vice versa).
+                ReapplyLexerForCurrentPath();
                 UpdateTitle();
                 RunSyntaxCheck();
             }
