@@ -1286,6 +1286,152 @@ namespace ScriptDeck.Forms
             }
         }
 
+        // -----------------------------------------------------------------
+        // Tools -> Launch shell here ▸ (PowerShell / cmd / Python)
+        // -----------------------------------------------------------------
+        //
+        // Each handler spawns an external interactive shell window --
+        // NOT routed through OutputSink. The user gets a full real
+        // terminal exactly as if they'd opened it from the Start menu,
+        // with two conveniences:
+        //
+        //   1. WorkingDirectory pre-set to the workspace's scriptsRoot
+        //      (so cd-style commands and relative paths just work)
+        //   2. Shared inputs published as environment variables (so
+        //      $env:computerName / %computerName% / os.environ['x']
+        //      match what a button would have seen)
+        //
+        // No-workspace-loaded case: still launches, just without the
+        // workspace-specific CWD or env vars.
+
+        private void menu_Tools_LaunchShell_PowerShell_Click(object sender, EventArgs e)
+        {
+            // -NoExit keeps the shell open after any initial command;
+            // -NoLogo skips the "PS 5.1.x..." banner that's just noise
+            // for a manual REPL. Bare powershell.exe = Windows
+            // PowerShell 5.1 on every supported box; switching to pwsh
+            // (PS 7) would be a separate feature.
+            LaunchExternalShell("powershell.exe", "-NoLogo -NoExit", friendlyName: "PowerShell");
+        }
+
+        private void menu_Tools_LaunchShell_Cmd_Click(object sender, EventArgs e)
+        {
+            // cmd.exe uses /K (not -NoExit) to mean "run this then stay
+            // open". With no command, /K is essentially "open and stay";
+            // we pass it explicitly for clarity.
+            LaunchExternalShell("cmd.exe", "/K", friendlyName: "Command Prompt");
+        }
+
+        private void menu_Tools_LaunchShell_Python_Click(object sender, EventArgs e)
+        {
+            // Interpreter precedence matches PythonExecutor's
+            // dispatch-time logic: workspace default -> bare "python"
+            // on PATH. There's no per-button override here because
+            // the launch isn't tied to a button. -i forces interactive
+            // mode even when stdin isn't a TTY (belt-and-suspenders
+            // for the rare case where the new console isn't picked up
+            // as a terminal).
+            string interpreter = !string.IsNullOrWhiteSpace(_activeWorkspace?.PythonInterpreter)
+                ? _activeWorkspace.PythonInterpreter
+                : "python";
+            LaunchExternalShell(interpreter, "-i", friendlyName: "Python");
+        }
+
+        // Common spawn helper. Sets CWD, injects shared-input env vars,
+        // surfaces a friendly error in the log if the interpreter isn't
+        // found (we DON'T want to crash on a missing python.exe).
+        private void LaunchExternalShell(string fileName, string args, string friendlyName)
+        {
+            string cwd = ResolveLaunchWorkingDirectory();
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName        = fileName,
+                Arguments       = args ?? string.Empty,
+                WorkingDirectory = cwd,
+                // UseShellExecute=false is required to override env
+                // vars; the cost is that the spawned process inherits
+                // ScriptDeck's stdio, but since ScriptDeck is a WinForms
+                // app with no attached console, Windows allocates a
+                // fresh console for each console-subsystem child --
+                // which is exactly what we want (a real terminal window).
+                UseShellExecute = false,
+                CreateNoWindow  = false,
+            };
+
+            // Inject shared-input snapshot as env vars, same convention
+            // CmdExecutor / PythonExecutor use. NormalizeSharedInputs
+            // applies the computerName ('.' -> machine name) rule so
+            // the launched shell sees the same value a button would.
+            if (_activeWorkspace?.SharedInputs != null && _renderer != null)
+            {
+                var values = _renderer.GetSharedInputValues();
+                values = NormalizeSharedInputs(values, _activeWorkspace.SharedInputs);
+                // Also overlay volatile session inputs (Set-SharedInput
+                // edits made during this session) so the launched shell
+                // matches the current Inputs grid.
+                foreach (var v in _sessionInputs.Values)
+                {
+                    if (v == null || string.IsNullOrEmpty(v.Id)) continue;
+                    values[v.Id] = v.Value ?? string.Empty;
+                }
+                foreach (var kv in values)
+                {
+                    if (string.IsNullOrEmpty(kv.Key)) continue;
+                    try { psi.EnvironmentVariables[kv.Key] = kv.Value ?? string.Empty; }
+                    catch { /* illegal env-var name -- skip */ }
+                }
+            }
+
+            try
+            {
+                System.Diagnostics.Process.Start(psi);
+                Sink.Log($"Launched {friendlyName} (cwd: {cwd})");
+            }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                // ENOENT typically: the interpreter isn't on PATH or the
+                // configured path is wrong. Surface in the log + a small
+                // info popup so the user can fix without hunting.
+                Sink.WriteError($"Could not launch {friendlyName}: {ex.Message}{Environment.NewLine}");
+                MessageBox.Show(this,
+                    "Failed to launch " + friendlyName + ":\n\n" + ex.Message +
+                    "\n\nMake sure the interpreter is installed and reachable on PATH. " +
+                    "For Python, you can override the path via the workspace's " +
+                    "pythonInterpreter setting or per-button override.",
+                    "Launch failed",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            catch (Exception ex)
+            {
+                Sink.WriteError($"Could not launch {friendlyName}: {ex.Message}{Environment.NewLine}");
+            }
+        }
+
+        // CWD precedence: workspace's explicit ScriptsRoot, then the
+        // directory of the workspace JSON file, then the user's profile.
+        // The user profile fallback avoids dumping the new shell into
+        // ScriptDeck's install directory (which they probably can't
+        // write to) when nothing's loaded.
+        private string ResolveLaunchWorkingDirectory()
+        {
+            if (!string.IsNullOrWhiteSpace(_activeWorkspace?.ScriptsRoot)
+                && System.IO.Directory.Exists(_activeWorkspace.ScriptsRoot))
+            {
+                return _activeWorkspace.ScriptsRoot;
+            }
+            if (!string.IsNullOrEmpty(_activeWorkspacePath))
+            {
+                try
+                {
+                    string dir = System.IO.Path.GetDirectoryName(_activeWorkspacePath);
+                    if (!string.IsNullOrEmpty(dir) && System.IO.Directory.Exists(dir))
+                        return dir;
+                }
+                catch { /* invalid path -- fall through */ }
+            }
+            return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        }
+
         private void menu_Tools_EditBootstrap_Click(object sender, EventArgs e)
         {
             // The bootstrap is the .ps1 file dot-sourced into every fresh

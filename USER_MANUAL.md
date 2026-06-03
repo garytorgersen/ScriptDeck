@@ -1446,6 +1446,50 @@ Inputs grid.
 - Interactive `input()` / stdin prompts will hang -- there's no host
   UI to satisfy them.
 
+### 12.12 Launch shell here (Tools menu)
+
+For ad-hoc work that doesn't justify creating a button, **Tools →
+Launch shell here ▸** opens a real interactive shell window. Three
+options:
+
+| Entry | What it launches | Stay-open arg |
+|---|---|---|
+| PowerShell | `powershell.exe` (Windows PowerShell 5.1) | `-NoLogo -NoExit` |
+| Command Prompt | `cmd.exe` | `/K` |
+| Python | the workspace's configured interpreter, or bare `python` on PATH | `-i` |
+
+The launched window is a normal top-level console -- not an embedded
+control, not routed through the OutputSink. It looks and behaves
+exactly like opening the shell from the Start menu, with two
+conveniences:
+
+1. **Working directory** pre-set to the workspace's `scriptsRoot`
+   (fallback: workspace file's directory, then the user profile when
+   no workspace is loaded).
+2. **Shared inputs published as environment variables** -- both Static
+   (workspace JSON) and Volatile (session) values. Normalize rules
+   apply, so `computerName=.` resolves to the local hostname before
+   the shell sees it. PowerShell sees `$env:computerName`, cmd sees
+   `%computerName%`, Python sees `os.environ['computerName']`.
+
+**Python interpreter resolution:** for the Python launcher, the
+precedence is workspace-level `pythonInterpreter` → bare `python` on
+PATH. (Per-button overrides don't apply because the launch isn't
+tied to a button.)
+
+**Failure mode:** if the interpreter isn't on PATH or the configured
+path is wrong, a small dialog explains "Failed to launch \<name\>:
+\<OS error\>" with a pointer to the `pythonInterpreter` workspace
+setting. No silent failure.
+
+Use cases this covers without the in-app Prompt-tab work:
+
+- "Just give me a shell here to run a quick `ipconfig`" -- one click
+- "Test what `Get-Process | Sort CPU -Desc | Select -First 5` does
+  before scripting it" -- click, paste, iterate
+- "Activate this workspace's venv and run a pytest" -- launch Python,
+  the interpreter is already venv-aware
+
 ---
 
 ## 13. Credits

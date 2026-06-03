@@ -40,7 +40,18 @@ namespace ScriptDeck.Forms
         private ToolStripMenuItem menu_Tools_ScriptEditor;
         private ToolStripMenuItem menu_Tools_EditBootstrap;
         private ToolStripMenuItem menu_Tools_ManageComputers;
+        // "Launch shell here" submenu + three child entries. Each spawns
+        // an external interactive shell window (powershell.exe / cmd.exe /
+        // python.exe) inheriting the workspace's scriptsRoot as CWD and
+        // shared-input values as environment variables. Lives under Tools
+        // because it's an authoring / convenience action, not a workspace
+        // mutation.
+        private ToolStripMenuItem menu_Tools_LaunchShell;
+        private ToolStripMenuItem menu_Tools_LaunchShell_PowerShell;
+        private ToolStripMenuItem menu_Tools_LaunchShell_Cmd;
+        private ToolStripMenuItem menu_Tools_LaunchShell_Python;
         private ToolStripSeparator menu_Tools_Sep0;
+        private ToolStripSeparator menu_Tools_Sep1;
 
         // ---- Main content ----
         // Three nested SplitContainers stack the four major regions
@@ -143,7 +154,12 @@ namespace ScriptDeck.Forms
             this.menu_Tools_ScriptEditor = new ToolStripMenuItem();
             this.menu_Tools_EditBootstrap = new ToolStripMenuItem();
             this.menu_Tools_ManageComputers = new ToolStripMenuItem();
+            this.menu_Tools_LaunchShell = new ToolStripMenuItem();
+            this.menu_Tools_LaunchShell_PowerShell = new ToolStripMenuItem();
+            this.menu_Tools_LaunchShell_Cmd = new ToolStripMenuItem();
+            this.menu_Tools_LaunchShell_Python = new ToolStripMenuItem();
             this.menu_Tools_Sep0 = new ToolStripSeparator();
+            this.menu_Tools_Sep1 = new ToolStripSeparator();
 
             this.splitContainer_Outer = new SplitContainer();
             this.splitContainer_Mid = new SplitContainer();
@@ -361,7 +377,9 @@ namespace ScriptDeck.Forms
                 this.menu_Tools_Sep0,
                 this.menu_Tools_ScriptEditor,
                 this.menu_Tools_EditBootstrap,
-                this.menu_Tools_ManageComputers
+                this.menu_Tools_ManageComputers,
+                this.menu_Tools_Sep1,
+                this.menu_Tools_LaunchShell
             });
             this.menu_Tools.Name = "menu_Tools";
             this.menu_Tools.Text = "&Tools";
@@ -416,6 +434,38 @@ namespace ScriptDeck.Forms
             this.menu_Tools_ManageComputers.Name = "menu_Tools_ManageComputers";
             this.menu_Tools_ManageComputers.Text = "&Manage Computers...";
             this.menu_Tools_ManageComputers.Click += new System.EventHandler(this.menu_Tools_ManageComputers_Click);
+            //
+            // menu_Tools_Sep1 -- divider between authoring tools and shell-launchers.
+            //
+            this.menu_Tools_Sep1.Name = "menu_Tools_Sep1";
+            //
+            // menu_Tools_LaunchShell (submenu) + three child entries
+            //
+            // Each child spawns an external interactive shell window
+            // (NOT routed through OutputSink -- the shell connects to a
+            // fresh OS console and behaves exactly like running it from
+            // the Start menu). CWD = workspace scriptsRoot; shared
+            // inputs injected as env vars. No-workspace-loaded case:
+            // launches in the user profile with no extra env.
+            this.menu_Tools_LaunchShell.Name = "menu_Tools_LaunchShell";
+            this.menu_Tools_LaunchShell.Text = "&Launch shell here";
+            this.menu_Tools_LaunchShell.DropDownItems.AddRange(new ToolStripItem[] {
+                this.menu_Tools_LaunchShell_PowerShell,
+                this.menu_Tools_LaunchShell_Cmd,
+                this.menu_Tools_LaunchShell_Python
+            });
+            //
+            this.menu_Tools_LaunchShell_PowerShell.Name = "menu_Tools_LaunchShell_PowerShell";
+            this.menu_Tools_LaunchShell_PowerShell.Text = "&PowerShell";
+            this.menu_Tools_LaunchShell_PowerShell.Click += new System.EventHandler(this.menu_Tools_LaunchShell_PowerShell_Click);
+            //
+            this.menu_Tools_LaunchShell_Cmd.Name = "menu_Tools_LaunchShell_Cmd";
+            this.menu_Tools_LaunchShell_Cmd.Text = "&Command Prompt";
+            this.menu_Tools_LaunchShell_Cmd.Click += new System.EventHandler(this.menu_Tools_LaunchShell_Cmd_Click);
+            //
+            this.menu_Tools_LaunchShell_Python.Name = "menu_Tools_LaunchShell_Python";
+            this.menu_Tools_LaunchShell_Python.Text = "P&ython";
+            this.menu_Tools_LaunchShell_Python.Click += new System.EventHandler(this.menu_Tools_LaunchShell_Python_Click);
 
             //
             // splitContainer_Outer — top: shared inputs band, bottom: everything else
