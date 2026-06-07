@@ -55,6 +55,15 @@ namespace ScriptDeck.Hosting
         public string PythonInterpreter { get; set; }
 
         /// <summary>
+        /// Bash-only: full path to the bash interpreter to spawn.
+        /// Same precedence as PythonInterpreter (button -> workspace
+        /// -> null). When null, BashExecutor probes PATH then falls
+        /// back to canonical Git Bash install paths. No effect for
+        /// non-bash executors.
+        /// </summary>
+        public string BashInterpreter { get; set; }
+
+        /// <summary>
         /// When true, dispatch routes the request through the background
         /// job queue (one worker, FIFO) instead of the foreground
         /// single-flight gate. Foreground and background can run

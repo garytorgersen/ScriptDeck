@@ -1,0 +1,8 @@
+# Force LF line endings on shell scripts. Bash on Windows hates CRLF
+# in .sh files -- the shebang fails with "/bin/bash^M: bad interpreter"
+# and `then` / `fi` keywords mid-statement get treated as identifiers.
+# Git's default autocrlf would normalize these to CRLF on checkout on
+# Windows machines; this attribute keeps them LF regardless of the
+# user's local autocrlf setting.
+*.sh   text eol=lf
+*.bash text eol=lf

@@ -26,6 +26,7 @@ namespace ScriptDeck.Tests.Fakes
         public void WriteInfo(string text)    => Writes.Add(("Info",    text));
         public void WriteVerbose(string text) => Writes.Add(("Verbose", text));
         public void WriteDebug(string text)   => Writes.Add(("Debug",   text));
+        public void WriteHeader(string text)  => Writes.Add(("Header",  text));
 
         public void Log(string message) => Logs.Add(message);
 

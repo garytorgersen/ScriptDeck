@@ -68,6 +68,13 @@ namespace ScriptDeck.Forms
         // Computers saves).
         private ComputerListStore _computerList;
 
+        // Probes the local box for installed interpreters (PowerShell,
+        // Python, bash variants) and surfaces them in the welcome banner
+        // + on demand from Tools -> Detect interpreters. Single instance
+        // owned by Shell so the in-memory cache survives across detect
+        // calls within the session.
+        private InterpreterDetector _interpreterDetector;
+
         // Phase 7: top-level menus rendered from MenuDefinition entries.
         // We track the inserted ToolStripMenuItems separately so reload /
         // close / edit cycles can remove them cleanly without touching
@@ -164,6 +171,7 @@ namespace ScriptDeck.Forms
             var cmd   = new CmdExecutor();
             var proc  = new ProcessExecutor();
             var py    = new PythonExecutor();
+            var bash  = new BashExecutor();
             // Both PS executors push session-input mutations through the
             // Shell's session dict. A script run in foreground OR in a
             // background job can equally call Set-SharedInput; either
@@ -179,10 +187,14 @@ namespace ScriptDeck.Forms
             // itself, not the instance.
             PythonExecutor.SharedInputSetRequested    += OnSessionInputSetRequested;
             PythonExecutor.SharedInputRemoveRequested += OnSessionInputRemoveRequested;
+            // BashExecutor follows the same pattern -- static events,
+            // one-shot dispatch covers fg + bg with a single instance.
+            BashExecutor.SharedInputSetRequested      += OnSessionInputSetRequested;
+            BashExecutor.SharedInputRemoveRequested   += OnSessionInputRemoveRequested;
             _dispatcher = new Dispatcher(
                 Sink,
-                executors:           new IExecutor[] { psFg, cmd, proc, py },
-                backgroundExecutors: new IExecutor[] { psBg, cmd, proc, py },
+                executors:           new IExecutor[] { psFg, cmd, proc, py, bash },
+                backgroundExecutors: new IExecutor[] { psBg, cmd, proc, py, bash },
                 history:             _runHistory);
             _dispatcher.BusyChanged += OnDispatcherBusyChanged;
             if (_dispatcher.BackgroundQueue != null)
@@ -250,8 +262,81 @@ namespace ScriptDeck.Forms
             Sink.WriteInfo("Open a workspace (File \u2192 Open Workspace) to load tabs, buttons, and shared inputs." + Environment.NewLine);
             Sink.WriteInfo("Toggle Edit mode (Ctrl+E) to add, rename, or remove tabs and buttons. Save with Ctrl+S." + Environment.NewLine);
 
+            // Kick off interpreter detection in the background. Probes
+            // PowerShell + Python (PATH + workspace) + Git Bash + WSL
+            // distros + MSYS2 + Cygwin; results post back to the
+            // console RTB once complete. Async because the first cold
+            // run can take ~1 second (cached on disk afterward so
+            // subsequent launches are instant unless an interpreter
+            // file changes).
+            _interpreterDetector = new InterpreterDetector();
+            _ = RunInterpreterScanAsync(showHeader: true);
+
             UpdateStatusBar();
             UpdateBusyUi(false);
+        }
+
+        // Run the interpreter scan + post results to the console. Used
+        // both at startup (showHeader=true) and from Tools -> Detect
+        // interpreters on demand. Marshals back to the UI thread via
+        // the OutputSink (which already handles cross-thread writes).
+        private async System.Threading.Tasks.Task RunInterpreterScanAsync(bool showHeader)
+        {
+            if (_interpreterDetector == null) return;
+            IList<DetectedInterpreter> found;
+            try
+            {
+                found = await _interpreterDetector.DetectAsync(
+                    workspacePythonInterpreter: _activeWorkspace?.PythonInterpreter,
+                    workspaceBashInterpreter:   _activeWorkspace?.BashInterpreter
+                ).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Sink.WriteWarning("Interpreter detection failed: " + ex.Message + Environment.NewLine);
+                return;
+            }
+
+            // Compose the banner. Console RTB writes are coalesced by
+            // the sink so multiple WriteInfo calls land in order.
+            if (showHeader)
+                Sink.WriteInfo("Detected interpreters:" + Environment.NewLine);
+            else
+                Sink.Log("Detected " + found.Count + " interpreter(s).");
+
+            foreach (var it in found)
+            {
+                // Format: "  KindLabel  Version  Path  [Label] [workspace default]"
+                string kindCol = PadOrTrunc(it.Kind.ToString(), 11);
+                string verCol  = PadOrTrunc(it.Version, 22);
+                string line    = "  " + kindCol + " " + verCol + " " + it.Path;
+                if (!string.IsNullOrEmpty(it.Label))
+                    line += "  [" + it.Label + "]";
+                if (it.IsWorkspaceDefault)
+                    line += "  [workspace default]";
+                Sink.WriteInfo(line + Environment.NewLine);
+            }
+            if (showHeader && found.Count == 0)
+                Sink.WriteInfo("  (none -- only Windows PowerShell will work)" + Environment.NewLine);
+            if (showHeader)
+            {
+                // Two trailing blank lines so the workspace-loaded
+                // message (or first script output) doesn't visually
+                // crowd up against the detected-interpreters list.
+                // Same spacing pattern used after the run-end ****
+                // separator and the workspace-loaded intro.
+                Sink.WriteInfo(Environment.NewLine + Environment.NewLine);
+            }
+        }
+
+        // Left-pad-or-truncate to a fixed visual width so the banner
+        // columns line up. We use straight string ops rather than
+        // tabular alignment to keep the RTB simple.
+        private static string PadOrTrunc(string s, int width)
+        {
+            s = s ?? string.Empty;
+            if (s.Length > width) return s.Substring(0, width - 1) + "\u2026";
+            return s.PadRight(width);
         }
 
         // ----- Right-click menus -------------------------------------------
@@ -1286,6 +1371,18 @@ namespace ScriptDeck.Forms
             }
         }
 
+        private void menu_Tools_DetectInterpreters_Click(object sender, EventArgs e)
+        {
+            // Force a fresh scan by clearing the cache first. The
+            // startup banner used the cache; this menu entry exists
+            // specifically for "I just installed a new Python / WSL
+            // distro / Git update, re-scan."
+            if (_interpreterDetector == null) return;
+            _interpreterDetector.ClearCache();
+            Sink.WriteInfo("Re-scanning interpreters..." + Environment.NewLine);
+            _ = RunInterpreterScanAsync(showHeader: true);
+        }
+
         // -----------------------------------------------------------------
         // Tools -> Launch shell here ▸ (PowerShell / cmd / Python)
         // -----------------------------------------------------------------
@@ -1335,6 +1432,34 @@ namespace ScriptDeck.Forms
                 ? _activeWorkspace.PythonInterpreter
                 : "python";
             LaunchExternalShell(interpreter, "-i", friendlyName: "Python");
+        }
+
+        private void menu_Tools_LaunchShell_Bash_Click(object sender, EventArgs e)
+        {
+            // Precedence matches BashExecutor.ResolveInterpreter:
+            // workspace default -> canonical Git Bash paths -> bare
+            // "bash" on PATH. Git Bash before bare PATH because the
+            // System32 bash.exe shim (added by Windows when WSL is
+            // installed) often forwards into a broken/missing distro
+            // and emits the unmistakable "<3>WSL (9 - Relay) ERROR:
+            // CreateProcessCommon" message. If the user genuinely
+            // wants WSL bash they can set the workspace's
+            // bashInterpreter to "wsl.exe -d Ubuntu bash" or similar.
+            string interpreter = _activeWorkspace?.BashInterpreter;
+            if (string.IsNullOrWhiteSpace(interpreter))
+            {
+                string[] fallbacks =
+                {
+                    @"C:\Program Files\Git\bin\bash.exe",
+                    @"C:\Program Files (x86)\Git\bin\bash.exe",
+                };
+                foreach (var fb in fallbacks)
+                {
+                    if (System.IO.File.Exists(fb)) { interpreter = fb; break; }
+                }
+                if (string.IsNullOrEmpty(interpreter)) interpreter = "bash";
+            }
+            LaunchExternalShell(interpreter, "-i", friendlyName: "Bash");
         }
 
         // Common spawn helper. Sets CWD, injects shared-input env vars,
@@ -1714,7 +1839,20 @@ namespace ScriptDeck.Forms
             // doesn't visually crowd up against the first record.
             // Also fires for menu_File_New (which calls LoadWorkspace
             // after creating + saving the file).
+            // Leading blank lines so this message has visible
+            // separation from whatever came before -- especially the
+            // startup interpreter detection list, which is async and
+            // may still be writing when the user opens a workspace
+            // quickly. Without the lead, a workspace-load that races
+            // ahead of detection's trailing newlines glues itself to
+            // the last detection line.
+            //
+            // Trailing blank lines so the first script-run output
+            // doesn't crowd up against the intro on the next click.
+            // Also fires for menu_File_New (which calls LoadWorkspace
+            // after creating + saving the file).
             Sink.WriteInfo(
+                Environment.NewLine + Environment.NewLine +
                 $"Workspace '{ws.Name}' loaded. " +
                 $"{ws.Tabs.Count} tab(s), " +
                 $"{ws.Tabs.Sum(t => t.Buttons?.Count ?? 0)} button(s), " +
@@ -2546,6 +2684,10 @@ namespace ScriptDeck.Forms
                 PythonInterpreter = !string.IsNullOrWhiteSpace(btn.PythonInterpreter)
                     ? btn.PythonInterpreter
                     : _activeWorkspace?.PythonInterpreter,
+                // Bash follows the exact same precedence pattern.
+                BashInterpreter = !string.IsNullOrWhiteSpace(btn.BashInterpreter)
+                    ? btn.BashInterpreter
+                    : _activeWorkspace?.BashInterpreter,
             };
         }
 

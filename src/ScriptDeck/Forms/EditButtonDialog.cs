@@ -42,6 +42,12 @@ namespace ScriptDeck.Forms
         // though the Edit Button dialog itself is modal over Shell.
         private readonly IList<SharedInputSnapshot> _sharedInputs;
 
+        // Captured ref to the button we're editing so the interpreter
+        // row can swap the displayed value between PythonInterpreter
+        // and BashInterpreter when the user flips the Executor combo.
+        // Mutating the source directly happens only in ApplyTo on OK.
+        private WsButton _sourceButton;
+
         public EditButtonDialog(WsButton source, string scriptsRoot)
             : this(source, scriptsRoot, dispatcher: null, sharedInputs: null) { }
 
@@ -81,10 +87,13 @@ namespace ScriptDeck.Forms
             checkBox_Log.Checked     = source.Log;
             checkBox_RunInBackground.Checked = source.RunInBackground;
 
-            // Python interpreter override. Empty when the workspace
-            // default (or PATH) is fine. Always hydrated even when the
-            // executor isn't python so a user can flip executors back
-            // and forth without losing the value.
+            // Per-language interpreter override. The same row is reused
+            // for python and bash -- its label + bound value swap based
+            // on the selected executor. UpdatePythonRowVisibility (now
+            // more aptly named UpdateInterpreterRowVisibility, but
+            // renaming would churn the Designer hookup) decides which
+            // value to display + persist.
+            _sourceButton = source;
             textBox_PythonInterpreter.Text = source.PythonInterpreter ?? string.Empty;
 
             // RTB format: select the saved value if it matches an item;
@@ -103,24 +112,69 @@ namespace ScriptDeck.Forms
             comboBox_Executor.TextChanged += (_, __) => UpdatePythonRowVisibility();
         }
 
+        private string _lastInterpreterExecutor; // tracks which language's value is currently in the textbox
         private void UpdatePythonRowVisibility()
         {
-            bool isPython = string.Equals(
-                (comboBox_Executor.Text ?? string.Empty).Trim(),
-                "python", StringComparison.OrdinalIgnoreCase);
-            label_PythonInterpreter.Visible   = isPython;
-            textBox_PythonInterpreter.Visible = isPython;
-            button_BrowsePython.Visible       = isPython;
+            // The single interpreter row serves both python and bash.
+            // The label switches ("Python:" / "Bash:") and the textbox
+            // value swaps to the matching field on the source button
+            // when the user flips the dropdown. This way they can
+            // configure both interpreters on the same button (e.g.
+            // a python override + a bash override) without losing
+            // values when toggling executors mid-edit.
+            string executor = (comboBox_Executor.Text ?? string.Empty).Trim();
+            bool isPython = string.Equals(executor, "python", StringComparison.OrdinalIgnoreCase);
+            bool isBash   = string.Equals(executor, "bash",   StringComparison.OrdinalIgnoreCase);
+
+            // Persist the currently-displayed value to whichever field
+            // it belongs to BEFORE swapping (otherwise edits made while
+            // python was selected would be lost when the user toggled
+            // to bash and back).
+            if (_sourceButton != null && _lastInterpreterExecutor != null)
+            {
+                if (string.Equals(_lastInterpreterExecutor, "python", StringComparison.OrdinalIgnoreCase))
+                    _sourceButton.PythonInterpreter = textBox_PythonInterpreter.Text;
+                else if (string.Equals(_lastInterpreterExecutor, "bash", StringComparison.OrdinalIgnoreCase))
+                    _sourceButton.BashInterpreter = textBox_PythonInterpreter.Text;
+            }
+
+            // Show + label + (re)load value for the new executor.
+            bool showRow = isPython || isBash;
+            label_PythonInterpreter.Visible   = showRow;
+            textBox_PythonInterpreter.Visible = showRow;
+            button_BrowsePython.Visible       = showRow;
+
+            if (showRow)
+            {
+                label_PythonInterpreter.Text = isPython ? "Python:" : "Bash:";
+                if (_sourceButton != null)
+                {
+                    textBox_PythonInterpreter.Text = isPython
+                        ? (_sourceButton.PythonInterpreter ?? string.Empty)
+                        : (_sourceButton.BashInterpreter   ?? string.Empty);
+                }
+                _lastInterpreterExecutor = isPython ? "python" : "bash";
+            }
+            else
+            {
+                _lastInterpreterExecutor = null;
+            }
         }
 
         private void Button_BrowsePython_Click(object sender, EventArgs e)
         {
-            // Filter favors python.exe but allows any file in case the
-            // user wants a stub launcher / shim (e.g. pyenv-win shim).
+            // Filter and title swap based on which language's row is
+            // active (the same Browse button serves both python and
+            // bash interpreter selection).
+            bool isBash = string.Equals(
+                (comboBox_Executor.Text ?? string.Empty).Trim(),
+                "bash", StringComparison.OrdinalIgnoreCase);
             using (var dlg = new OpenFileDialog
             {
-                Title           = "Select Python interpreter",
-                Filter          = "Python executable (python*.exe)|python*.exe|All files (*.*)|*.*",
+                Title           = isBash ? "Select Bash interpreter" : "Select Python interpreter",
+                Filter          = isBash
+                    ? "Bash executable (bash*.exe;wsl.exe)|bash*.exe;wsl.exe|All files (*.*)|*.*"
+                    : "Python executable (python*.exe)|python*.exe|All files (*.*)|*.*",
                 CheckFileExists = true,
             })
             {
@@ -170,13 +224,35 @@ namespace ScriptDeck.Forms
             target.Log     = checkBox_Log.Checked;
             target.RunInBackground = checkBox_RunInBackground.Checked;
 
-            // Persist the python interpreter override only when the
-            // executor is python AND a value was supplied. Storing it
-            // for non-python executors would just clutter the JSON.
+            // Persist BOTH interpreter overrides. The currently-visible
+            // textbox holds the value for whichever executor is selected;
+            // the OTHER language's value lives on the source button
+            // (last sync'd via UpdatePythonRowVisibility's flush). Only
+            // persist the matching field when the executor is that
+            // language to avoid cluttering JSON for non-applicable
+            // executors.
             bool isPython = string.Equals(
                 target.Executor, "python", StringComparison.OrdinalIgnoreCase);
-            string py = textBox_PythonInterpreter.Text?.Trim();
-            target.PythonInterpreter = (isPython && !string.IsNullOrEmpty(py)) ? py : null;
+            bool isBash = string.Equals(
+                target.Executor, "bash", StringComparison.OrdinalIgnoreCase);
+            string current = textBox_PythonInterpreter.Text?.Trim();
+
+            if (isPython)
+            {
+                target.PythonInterpreter = string.IsNullOrEmpty(current) ? null : current;
+                target.BashInterpreter   = _sourceButton?.BashInterpreter; // preserved across flips
+            }
+            else if (isBash)
+            {
+                target.BashInterpreter   = string.IsNullOrEmpty(current) ? null : current;
+                target.PythonInterpreter = _sourceButton?.PythonInterpreter;
+            }
+            else
+            {
+                // Non-python, non-bash -- clear both to keep JSON tidy.
+                target.PythonInterpreter = null;
+                target.BashInterpreter   = null;
+            }
 
             // RTB format: persist null when "default" is selected so the
             // JSON stays minimal for buttons that didn't opt in. Skip
@@ -267,9 +343,11 @@ namespace ScriptDeck.Forms
             {
                 Title = "Select script or executable",
                 Filter =
-                    "Common (*.ps1;*.cmd;*.bat;*.exe)|*.ps1;*.cmd;*.bat;*.exe|" +
+                    "Common (*.ps1;*.cmd;*.bat;*.exe;*.py;*.sh)|*.ps1;*.cmd;*.bat;*.exe;*.py;*.sh|" +
                     "PowerShell (*.ps1)|*.ps1|" +
                     "CMD/BAT (*.cmd;*.bat)|*.cmd;*.bat|" +
+                    "Python (*.py)|*.py|" +
+                    "Bash (*.sh)|*.sh|" +
                     "Executables (*.exe)|*.exe|" +
                     "All files (*.*)|*.*",
                 CheckFileExists = true,
@@ -314,9 +392,12 @@ namespace ScriptDeck.Forms
 
         private void AutoSelectExecutorFromExtension(string path)
         {
-            // Soft hint: only switch the executor if the user is on the
-            // default ("powershell") and the new extension obviously
-            // disagrees. We never overwrite a deliberately chosen executor.
+            // Soft hint: switch the executor to match the file's
+            // extension. We never overwrite a deliberately chosen
+            // executor that disagrees with the extension -- if you've
+            // set "process" and pick a .py, we leave it alone. The
+            // ext->kind map is the canonical mapping the dispatcher
+            // also uses to validate.
             var ext = (Path.GetExtension(path) ?? string.Empty).ToLowerInvariant();
             string suggest = null;
             switch (ext)
@@ -325,6 +406,9 @@ namespace ScriptDeck.Forms
                 case ".cmd":
                 case ".bat":  suggest = "cmd"; break;
                 case ".exe":  suggest = "process"; break;
+                case ".py":   suggest = "python"; break;
+                case ".sh":
+                case ".bash": suggest = "bash"; break;
             }
             if (suggest != null) comboBox_Executor.Text = suggest;
         }

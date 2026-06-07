@@ -240,6 +240,37 @@ namespace ScriptDeck.Hosting
             ExecutionResult result = null;
             try
             {
+                // Wipe stale grid content from the previous run so a
+                // command that produces no structured output starts
+                // with an empty grid -- without this, the previous
+                // command's rows linger and look like they belong to
+                // the new run. The grid is a single shared surface
+                // with a 1:1 click->result relationship; users who
+                // want to keep a result around can use the popout
+                // (toolbar glyph or right-click -> Open in new window).
+                //
+                // Console RTB is NOT cleared between runs -- a scroll-
+                // back log of outputs is useful, and the **** divider
+                // already gives visual boundaries.
+                try { runSink.ClearGrid(); } catch { /* sink failure mustn't abort dispatch */ }
+
+                // Per-click banner in the main console RTB. White on
+                // black so it visibly stands apart from the script's
+                // green output. Format: "Running: <label> [<executor>]
+                // - <script path>" followed by a blank line that
+                // separates the banner from the script's first write.
+                try
+                {
+                    string scriptDisplay = !string.IsNullOrEmpty(request.ScriptPath)
+                        ? "  -  " + request.ScriptPath
+                        : string.Empty;
+                    runSink.WriteHeader(
+                        "Running: " + (request.ButtonLabel ?? "(unnamed)") +
+                        "  [" + executorKind + "]" + scriptDisplay +
+                        Environment.NewLine + Environment.NewLine);
+                }
+                catch { /* sink failure mustn't abort dispatch */ }
+
                 runSink.Log($"Running: {request.ButtonLabel} ({executorKind})");
                 result = await executor.ExecuteAsync(request, runSink, cts.Token).ConfigureAwait(false);
 

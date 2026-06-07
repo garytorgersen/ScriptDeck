@@ -1446,7 +1446,120 @@ Inputs grid.
 - Interactive `input()` / stdin prompts will hang -- there's no host
   UI to satisfy them.
 
-### 12.12 Launch shell here (Tools menu)
+### 12.12 Bash as a first-class executor
+
+`bash` joins powershell / cmd / process / python as a button executor.
+Like cmd and python, each click spawns a fresh subprocess. The
+biggest difference from the other shells: **"bash on Windows" is
+fragmented** -- Git Bash, WSL, MSYS2, and Cygwin each have their own
+path conventions. ScriptDeck doesn't try to abstract over them at the
+executor level, but ships a bootstrap with path-translation helpers
+so user scripts can stay portable.
+
+**Interpreter selection** -- three layers, highest precedence first:
+
+1. Per-button override (`Button.BashInterpreter`)
+2. Workspace default (`Workspace.BashInterpreter`)
+3. PATH fallback: bare `bash`, then canonical Git Bash paths
+   (`C:\Program Files\Git\bin\bash.exe`, then x86)
+
+Typical values: a Git Bash `bash.exe` under Program Files, or
+`wsl.exe -d Ubuntu-22.04 bash` to dispatch into a specific WSL distro.
+
+**Bootstrap module** -- `scriptdeck_bootstrap.sh` ships next to
+`ScriptDeck.exe` and is auto-sourced via `BASH_ENV`, so any button
+script gets the helpers without an explicit `source` line:
+
+| Helper                                   | What it does |
+|------------------------------------------|---|
+| `scriptdeck_path "$p"`                   | Auto-normalize any path to the form THIS shell understands (Windows-style input gets translated; native input passes through). |
+| `scriptdeck_to_unix_path "$p"`           | Force a Windows path to bash-native (`/mnt/c/...` under WSL, `/c/...` under Git Bash). |
+| `scriptdeck_to_win_path "$p"`            | Reverse: bash-native -> `C:\...`. |
+| `scriptdeck_write_rtb "string"`          | Route a string to the console RTB only (skip grid). |
+| `scriptdeck_write_grid_row k1=v1 k2=v2`  | Append one grid row. First call's keys pin the column set. |
+| `scriptdeck_set_shared_input id val [label]` | Create / update a Volatile shared input. Refuses Static ids. |
+| `scriptdeck_remove_shared_input id`      | Drop a Volatile shared input. Refuses Static ids. |
+
+Environment auto-detected once and stashed in `$__scriptdeck_env`
+(`wsl` / `git-bash` / `cygwin` / `other`) -- the helpers branch on
+that to do the right thing per shell.
+
+**Shared inputs** -- published as individual environment variables
+just like the other executors. Bash sees `$computerName`, etc.,
+plus the path-translation helpers if any of those values are paths.
+
+**Encoding** -- `LANG=C.UTF-8` and `LC_ALL=C.UTF-8` set on the child
+process so non-ASCII output renders correctly under Git Bash / WSL.
+
+**Script Editor** -- opens `.sh` and `.bash` files with the
+Scintilla Bash lexer (syntax highlighting for keywords, strings,
+here-docs, `$var` / `${var}` expansion, decorators). The bootstrap's
+function names are added to the keyword set so they highlight too.
+Syntax check uses `bash -n` (parse-only mode via stdin), with the
+same soft-fail "not checked" behavior when bash isn't on PATH.
+Run Test writes a `scratch.sh` with forced LF line endings -- CRLF
+breaks bash's shebang parsing (`/bin/bash^M: bad interpreter`).
+
+**Sample** -- the sample workspace's Tools tab now has a **Bash Info**
+button running `scripts/Get-BashInfo.sh`. It demonstrates plain
+`echo`, the path-translation helper, three grid rows, and
+`scriptdeck_set_shared_input`.
+
+**What's NOT supported in v1:**
+
+- No long-lived bash session -- each click is a fresh subprocess.
+  Use `scriptdeck_set_shared_input` for cross-click state.
+- Interactive `read` prompts will hang -- no host UI to satisfy them.
+- The JSON-tag escape function handles `\`, `"`, `\n`, `\r`, `\t`.
+  Embedded NUL / fancy Unicode / control bytes will hiccup; if you
+  have wild data, prefer Python's `json.dumps`.
+- WSL invocations don't auto-source the bootstrap (the Windows-side
+  `BASH_ENV` path isn't visible inside the WSL distro). WSL users
+  can manually source a copy from inside the distro.
+
+### 12.13 Detected interpreters (welcome banner + Tools menu)
+
+ScriptDeck now probes for installed script interpreters at startup
+and lists them in the console RTB's welcome banner:
+
+```
+Detected interpreters:
+  PowerShell  5.1.26100.6584      (built-in)  [Windows PowerShell]
+  Python      3.13.0               C:\Python313\python.exe  [python (PATH)]
+  Python      3.11.9               C:\projects\foo\.venv\Scripts\python.exe  [workspace default]
+  Bash        4.4.23(1)-release    C:\Program Files\Git\bin\bash.exe  [Git Bash]
+  Bash        5.2.21(1)-release    wsl.exe  [WSL: Ubuntu-22.04]
+```
+
+**What gets probed:**
+
+| Interpreter | Detection |
+|---|---|
+| PowerShell | In-process via `$PSVersionTable` -- always present on Windows. |
+| Python (PATH) | `python --version` |
+| Python (workspace default) | Probes `Workspace.PythonInterpreter` if set + different from the PATH result |
+| Bash (PATH) | `bash --version` |
+| Git Bash | `C:\Program Files\Git\bin\bash.exe`, then x86 |
+| MSYS2 | `C:\msys64\usr\bin\bash.exe` |
+| Cygwin | `C:\cygwin64\bin\bash.exe`, then x86 |
+| WSL distros | `wsl --list --quiet` -> per-distro `bash --version` |
+
+**Caching** -- results are cached in `%LocalAppData%\ScriptDeck\
+interpreters.json`, keyed by `(path, mtime)` per interpreter. Cold
+start: ~1 second total across all probes. Subsequent launches read
+from cache and add zero delay unless an interpreter's `.exe`
+mtime has changed.
+
+**`[workspace default]` marker** -- flags whichever Python (and
+eventually bash) interpreter the active workspace is configured to
+use, so you can verify at a glance "yes, that venv is the one my
+buttons will fire."
+
+**Re-scan on demand** -- **Tools → Detect interpreters** clears the
+cache and re-runs the probe. Use after installing a new Python /
+updating Git / adding a WSL distro / etc.
+
+### 12.14 Launch shell here (Tools menu)
 
 For ad-hoc work that doesn't justify creating a button, **Tools →
 Launch shell here ▸** opens a real interactive shell window. Three

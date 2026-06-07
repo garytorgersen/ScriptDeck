@@ -217,6 +217,28 @@
           "Width": 150,
           "Height": 36,
           "GroupId": null
+        },
+        {
+          "Id": "btn-bashinfo",
+          "Label": "Bash Info",
+          "Executor": "bash",
+          "ScriptPath": "scripts\\Get-BashInfo.sh",
+          "Args": [],
+          "WorkingDirectory": null,
+          "Outputs": [
+            "rtb",
+            "grid"
+          ],
+          "Confirm": false,
+          "Log": true,
+          "RtbFormat": null,
+          "RunInBackground": false,
+          "BashInterpreter": null,
+          "X": 502,
+          "Y": 16,
+          "Width": 150,
+          "Height": 36,
+          "GroupId": null
         }
       ],
       "Groups": []

@@ -102,6 +102,10 @@ namespace ScriptDeck.Hosting
         public void WriteInfo(string text)    => Enqueue(_consoleQueue, text, Color.Cyan);
         public void WriteVerbose(string text) => Enqueue(_consoleQueue, text, Color.LightGray);
         public void WriteDebug(string text)   => Enqueue(_consoleQueue, text, Color.Gray);
+        // White on the black console reads as "this isn't script
+        // output -- it's ScriptDeck telling you something." Currently
+        // used for the per-click run banner.
+        public void WriteHeader(string text)  => Enqueue(_consoleQueue, text, Color.White);
 
         public void ClearOutput()
         {

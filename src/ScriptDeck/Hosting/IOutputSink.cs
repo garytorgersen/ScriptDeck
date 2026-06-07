@@ -22,6 +22,13 @@ namespace ScriptDeck.Hosting
         void WriteVerbose(string text);
         void WriteDebug(string text);
 
+        // Rendered in white. Used by the dispatcher to print a
+        // per-click "Running: <button> [<executor>]" banner that
+        // stands out from the script's green/yellow/red output. The
+        // caller decides on newlines (header line + blank separator
+        // before the executor's first write is the convention).
+        void WriteHeader(string text);
+
         // Persistent log line in the bottom RTB. `[timestamp] - <message>`
         // formatting is the sink's responsibility, not the caller's, so all
         // log lines look identical regardless of which executor wrote them.

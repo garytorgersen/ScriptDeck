@@ -177,10 +177,12 @@ namespace ScriptDeck.Forms
             // isn't supported -- close + reopen to switch.
             if (IsPythonPath(_currentPath))
                 ConfigurePythonLexer(s);
+            else if (IsBashPath(_currentPath))
+                ConfigureBashLexer(s);
             else
                 ConfigurePowerShellLexer(s);
 
-            // Brace match colors apply to BOTH languages (language-
+            // Brace match colors apply to all languages (language-
             // neutral Scintilla styles). Lives here after the lexer
             // dispatch so it isn't accidentally scoped to one lexer.
             s.Styles[Style.BraceLight].ForeColor = Color.LimeGreen;
@@ -196,6 +198,13 @@ namespace ScriptDeck.Forms
                 || path.EndsWith(".pyw", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static bool IsBashPath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            return path.EndsWith(".sh",   StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".bash", StringComparison.OrdinalIgnoreCase);
+        }
+
         // Re-applies the lexer + keyword sets + style colors to match
         // the current _currentPath's extension. Used when the open file
         // changes after construction (Browse to a different file, Save
@@ -206,6 +215,8 @@ namespace ScriptDeck.Forms
         {
             if (IsPythonPath(_currentPath))
                 ConfigurePythonLexer(scintilla_Editor);
+            else if (IsBashPath(_currentPath))
+                ConfigureBashLexer(scintilla_Editor);
             else
                 ConfigurePowerShellLexer(scintilla_Editor);
             // Force a colorise pass over the whole buffer so the new
@@ -291,6 +302,55 @@ namespace ScriptDeck.Forms
             s.Styles[Style.Python.StringEol].ForeColor        = Color.Red;
             s.Styles[Style.Python.Word2].ForeColor            = Color.FromArgb(0, 96, 160); // builtins
             s.Styles[Style.Python.Decorator].ForeColor        = Color.FromArgb(128, 0, 128);
+        }
+
+        private static void ConfigureBashLexer(ScintillaNET.Scintilla s)
+        {
+            // ScintillaNET 3.6.3's Lexer enum doesn't include a Bash
+            // entry, but the underlying Scintilla library DOES support
+            // it (SCLEX_BASH = 62). Cast the raw int value -- the
+            // wrapper forwards it unchanged to SCI_SETLEXER.
+            // Newer ScintillaNET (4.x+) has Lexer.Bash as a named
+            // value; this cast continues to work on those too because
+            // the underlying constant is stable.
+            s.Lexer = (Lexer)62;
+
+            // Keyword set 0 = shell keywords + common builtins. The
+            // bash lexer doesn't separate user-defined commands from
+            // shell builtins via styles, but providing a known set
+            // helps token classification.
+            s.SetKeywords(0,
+                "if then else elif fi case esac for while until do done " +
+                "function return break continue in select time " +
+                "true false test exit source declare local readonly export " +
+                "echo printf read cd pwd pushd popd dirs alias unalias " +
+                "set unset shift trap eval exec wait hash kill jobs bg fg " +
+                "command type which builtin getopts getopt let " +
+                "shopt complete compgen ulimit umask history fc " +
+                "scriptdeck_path scriptdeck_to_unix_path scriptdeck_to_win_path " +
+                "scriptdeck_write_rtb scriptdeck_write_grid_row " +
+                "scriptdeck_set_shared_input scriptdeck_remove_shared_input");
+
+            // ScintillaNET 3.6.3 doesn't expose Style.Bash.* named
+            // constants, so we use the raw Scintilla SCE_SH_* style
+            // ids directly. From scintilla/include/SciLexer.h:
+            //   0 Default, 1 Error, 2 Comment, 3 Number, 4 Word,
+            //   5 String, 6 Character, 7 Operator, 8 Identifier,
+            //   9 Scalar ($var), 10 ParamExpand (${var}),
+            //   11 Backticks, 12 HereDelim, 13 HereString.
+            s.Styles[0].ForeColor  = Color.Black;
+            s.Styles[2].ForeColor  = Color.FromArgb(0, 128, 0);   // comment
+            s.Styles[3].ForeColor  = Color.FromArgb(0, 0, 200);   // number
+            s.Styles[4].ForeColor  = Color.Blue;                  // keywords
+            s.Styles[5].ForeColor  = Color.FromArgb(163, 21, 21); // string
+            s.Styles[6].ForeColor  = Color.FromArgb(163, 21, 21); // character
+            s.Styles[7].ForeColor  = Color.FromArgb(80, 80, 80);  // operator
+            s.Styles[8].ForeColor  = Color.Black;                 // identifier
+            s.Styles[9].ForeColor  = Color.FromArgb(128, 0, 128); // scalar $var
+            s.Styles[10].ForeColor = Color.FromArgb(128, 0, 128); // ${var}
+            s.Styles[11].ForeColor = Color.FromArgb(163, 21, 21); // `cmd`
+            s.Styles[12].ForeColor = Color.FromArgb(0, 96, 160);  // here-delim
+            s.Styles[13].ForeColor = Color.FromArgb(163, 21, 21); // here-string
         }
 
         private static bool IsBraceChar(int c) =>
@@ -454,11 +514,18 @@ namespace ScriptDeck.Forms
         {
             // For Python files we shell out to `python -c "import ast; ..."`
             // because there's no in-process Python parser on net48. For
-            // PowerShell we use the existing ScriptValidator (which uses
+            // Bash, `bash -n` is the parse-only mode -- exits 0 on
+            // success, prints errors to stderr otherwise. For PowerShell
+            // we use the existing ScriptValidator (which uses
             // System.Management.Automation's parser in-process).
             if (IsPythonPath(_currentPath))
             {
                 RunPythonSyntaxCheck();
+                return;
+            }
+            if (IsBashPath(_currentPath))
+            {
+                RunBashSyntaxCheck();
                 return;
             }
 
@@ -547,6 +614,101 @@ namespace ScriptDeck.Forms
             }
         }
 
+        // Bash syntax check via `bash -n` (parse-only mode). We pass
+        // the editor content via stdin so we don't have to write a
+        // scratch file just for validation. Same soft-fail behavior
+        // as Python: missing bash -> "not checked" status.
+        private void RunBashSyntaxCheck()
+        {
+            try
+            {
+                // Resolve bash via the executor's fallback logic --
+                // bare bash on PATH, then canonical Git Bash paths.
+                string bashPath = ResolveBashForSyntaxCheck();
+                if (string.IsNullOrEmpty(bashPath))
+                {
+                    statusLabel_Syntax.Text = "Syntax: not checked (bash not found)";
+                    statusLabel_Syntax.ForeColor = SystemColors.GrayText;
+                    return;
+                }
+
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName               = bashPath,
+                    Arguments              = "-n -s",  // -s reads from stdin
+                    UseShellExecute        = false,
+                    RedirectStandardInput  = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError  = true,
+                    CreateNoWindow         = true,
+                };
+                using (var p = System.Diagnostics.Process.Start(psi))
+                {
+                    if (p == null)
+                    {
+                        statusLabel_Syntax.Text = "Syntax: not checked (no interpreter)";
+                        statusLabel_Syntax.ForeColor = SystemColors.GrayText;
+                        return;
+                    }
+                    // bash on Windows reads stdin as bytes; LF line
+                    // endings are mandatory or the parser hiccups on
+                    // \r in the middle of statements.
+                    string source = scintilla_Editor.Text.Replace("\r\n", "\n");
+                    p.StandardInput.Write(source);
+                    p.StandardInput.Close();
+                    if (!p.WaitForExit(3000))
+                    {
+                        try { p.Kill(); } catch { }
+                        statusLabel_Syntax.Text = "Syntax: check timed out";
+                        statusLabel_Syntax.ForeColor = Color.Firebrick;
+                        return;
+                    }
+                    if (p.ExitCode == 0)
+                    {
+                        statusLabel_Syntax.Text = "Syntax: OK";
+                        statusLabel_Syntax.ForeColor = SystemColors.ControlText;
+                        return;
+                    }
+                    // bash prints "bash: line N: <error>" on stderr.
+                    // First line is the most actionable.
+                    string err = p.StandardError.ReadToEnd() ?? string.Empty;
+                    string firstError = err.Split(new[] { '\r', '\n' },
+                                                  StringSplitOptions.RemoveEmptyEntries)
+                                            .FirstOrDefault() ?? "(unknown)";
+                    statusLabel_Syntax.Text = "Syntax: " + Truncate(firstError, 120);
+                    statusLabel_Syntax.ForeColor = Color.Firebrick;
+                }
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                statusLabel_Syntax.Text = "Syntax: not checked (bash not on PATH)";
+                statusLabel_Syntax.ForeColor = SystemColors.GrayText;
+            }
+            catch (Exception ex)
+            {
+                statusLabel_Syntax.Text = "Syntax: check failed -- " + Truncate(ex.Message, 100);
+                statusLabel_Syntax.ForeColor = Color.Firebrick;
+            }
+        }
+
+        // Mirror BashExecutor.ResolveInterpreter for the syntax-check
+        // path. Keep light: bare "bash" first, then canonical Git Bash.
+        private static string ResolveBashForSyntaxCheck()
+        {
+            string[] candidates =
+            {
+                "bash",
+                @"C:\Program Files\Git\bin\bash.exe",
+                @"C:\Program Files (x86)\Git\bin\bash.exe",
+            };
+            foreach (var c in candidates)
+            {
+                if (System.IO.File.Exists(c)) return c;
+                if (c == "bash") return c; // let Process.Start probe PATH
+            }
+            return null;
+        }
+
         private static string Truncate(string s, int max)
         {
             if (string.IsNullOrEmpty(s)) return s;
@@ -562,14 +724,15 @@ namespace ScriptDeck.Forms
             if (_testRunning) return;
 
             bool isPython = IsPythonPath(_currentPath);
+            bool isBash   = IsBashPath(_currentPath);
 
             // Refuse to run if there are syntax errors. For PowerShell
             // we have ScriptValidator (in-process AST parser). For
-            // Python we skip the pre-flight check because spawning a
-            // separate `python -c ast.parse` adds startup cost on
+            // Python and Bash we skip the pre-flight check because
+            // spawning a separate validator adds startup cost on
             // every Run; the executor itself will surface SyntaxError
             // on stderr if the user has one.
-            if (!isPython)
+            if (!isPython && !isBash)
             {
                 var issues = ScriptValidator.Validate(scintilla_Editor.Text);
                 if (issues.Count > 0)
@@ -585,14 +748,25 @@ namespace ScriptDeck.Forms
             // Write the editor text to a scratch file so the executor
             // can run it. Extension matches the language so the
             // executor + any shebang-style behavior do the right thing
-            // (scratch.ps1 for PowerShell, scratch.py for Python).
+            // (scratch.ps1, scratch.py, scratch.sh).
             string scratchDir = Path.Combine(Path.GetTempPath(), "ScriptDeck");
-            string scratchPath = Path.Combine(scratchDir,
-                isPython ? "scratch.py" : "scratch.ps1");
+            string scratchPath;
+            if (isPython)    scratchPath = Path.Combine(scratchDir, "scratch.py");
+            else if (isBash) scratchPath = Path.Combine(scratchDir, "scratch.sh");
+            else             scratchPath = Path.Combine(scratchDir, "scratch.ps1");
+
             try
             {
                 Directory.CreateDirectory(scratchDir);
-                File.WriteAllText(scratchPath, scintilla_Editor.Text);
+                // Bash absolutely requires LF line endings. CRLF in a
+                // .sh breaks the shebang ("/bin/bash^M: bad interpreter")
+                // and confuses the parser mid-statement. Force LF for
+                // the bash scratch file; other languages don't care
+                // and we use the platform default (CRLF on Windows).
+                string content = isBash
+                    ? scintilla_Editor.Text.Replace("\r\n", "\n")
+                    : scintilla_Editor.Text;
+                File.WriteAllText(scratchPath, content);
             }
             catch (Exception ex)
             {
@@ -629,7 +803,10 @@ namespace ScriptDeck.Forms
                     RtbFormat     = string.Equals(format, "default", StringComparison.OrdinalIgnoreCase) ? null : format,
                 };
 
-                await _dispatcher.ExecuteAsync(req, isPython ? "python" : "powershell", _testSink).ConfigureAwait(true);
+                string executorKind = isPython ? "python"
+                                     : isBash   ? "bash"
+                                                : "powershell";
+                await _dispatcher.ExecuteAsync(req, executorKind, _testSink).ConfigureAwait(true);
             }
             catch (Exception ex)
             {
@@ -694,32 +871,33 @@ namespace ScriptDeck.Forms
         private void Button_SaveAs_Click(object sender, EventArgs e)
         {
             // Bias the dialog to whatever language the editor is
-            // currently holding. If the user is editing a .py, default
-            // to .py; otherwise .ps1. The combined filter ("Script
-            // files") is listed first so a user picking from either
-            // language sees the full set without scrolling.
+            // currently holding. The combined filter ("Script files")
+            // is listed first so users picking from any language see
+            // the full set without scrolling.
             bool curIsPython = IsPythonPath(_currentPath);
+            bool curIsBash   = IsBashPath(_currentPath);
+            // FilterIndex is 1-based. 1=combined, 2=ps1, 3=py, 4=sh.
+            int idx = curIsPython ? 3 : curIsBash ? 4 : 2;
+            string defExt = curIsPython ? "py" : curIsBash ? "sh" : "ps1";
+            string newName = curIsPython ? "NewScript.py"
+                           : curIsBash   ? "NewScript.sh"
+                                         : "NewScript.ps1";
             using (var dlg = new SaveFileDialog
             {
                 Title = "Save Script As",
-                Filter = "Script files (*.ps1;*.py)|*.ps1;*.py|"
+                Filter = "Script files (*.ps1;*.py;*.sh)|*.ps1;*.py;*.sh|"
                        + "PowerShell scripts (*.ps1)|*.ps1|"
                        + "Python scripts (*.py)|*.py|"
+                       + "Bash scripts (*.sh)|*.sh|"
                        + "All files (*.*)|*.*",
-                // FilterIndex is 1-based. Picks the matching single-
-                // extension filter so the OS suggested-extension UX
-                // (which uses the current filter, not DefaultExt) is
-                // right for the current file's language.
-                FilterIndex = curIsPython ? 3 : 2,
-                DefaultExt = curIsPython ? "py" : "ps1",
+                FilterIndex = idx,
+                DefaultExt = defExt,
                 AddExtension = true,
                 OverwritePrompt = true,
                 InitialDirectory = !string.IsNullOrEmpty(_scriptsRoot) && Directory.Exists(_scriptsRoot)
                     ? _scriptsRoot
                     : (string.IsNullOrEmpty(_currentPath) ? null : Path.GetDirectoryName(_currentPath)),
-                FileName = string.IsNullOrEmpty(_currentPath)
-                    ? (curIsPython ? "NewScript.py" : "NewScript.ps1")
-                    : Path.GetFileName(_currentPath),
+                FileName = string.IsNullOrEmpty(_currentPath) ? newName : Path.GetFileName(_currentPath),
             })
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
@@ -751,9 +929,10 @@ namespace ScriptDeck.Forms
             using (var dlg = new OpenFileDialog
             {
                 Title = "Open Script",
-                Filter = "Script files (*.ps1;*.py)|*.ps1;*.py|"
+                Filter = "Script files (*.ps1;*.py;*.sh)|*.ps1;*.py;*.sh|"
                        + "PowerShell scripts (*.ps1)|*.ps1|"
                        + "Python scripts (*.py)|*.py|"
+                       + "Bash scripts (*.sh)|*.sh|"
                        + "All files (*.*)|*.*",
                 CheckFileExists = true,
                 InitialDirectory = !string.IsNullOrEmpty(_scriptsRoot) && Directory.Exists(_scriptsRoot)
@@ -920,6 +1099,10 @@ namespace ScriptDeck.Forms
             public void WriteInfo   (string text) => Append(text, Color.DeepSkyBlue);
             public void WriteVerbose(string text) => Append(text, Color.MediumPurple);
             public void WriteDebug  (string text) => Append(text, Color.LightSlateGray);
+            // The editor's output background is white, so a pure-white
+            // header would be invisible. Use a strong dark color that
+            // reads as a banner without colliding with stream colors.
+            public void WriteHeader (string text) => Append(text, Color.Black);
 
             public void Log(string message)
             {

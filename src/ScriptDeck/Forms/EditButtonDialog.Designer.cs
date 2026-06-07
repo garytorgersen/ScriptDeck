@@ -113,7 +113,7 @@ namespace ScriptDeck.Forms
             this.comboBox_Executor.Location = new System.Drawing.Point(110, 72);
             this.comboBox_Executor.Width = 200;
             this.comboBox_Executor.DropDownStyle = ComboBoxStyle.DropDownList;
-            this.comboBox_Executor.Items.AddRange(new object[] { "powershell", "cmd", "process", "python" });
+            this.comboBox_Executor.Items.AddRange(new object[] { "powershell", "cmd", "process", "python", "bash" });
             //
             // label_ScriptPath
             //

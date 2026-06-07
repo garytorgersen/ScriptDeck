@@ -40,6 +40,7 @@ namespace ScriptDeck.Forms
         private ToolStripMenuItem menu_Tools_ScriptEditor;
         private ToolStripMenuItem menu_Tools_EditBootstrap;
         private ToolStripMenuItem menu_Tools_ManageComputers;
+        private ToolStripMenuItem menu_Tools_DetectInterpreters;
         // "Launch shell here" submenu + three child entries. Each spawns
         // an external interactive shell window (powershell.exe / cmd.exe /
         // python.exe) inheriting the workspace's scriptsRoot as CWD and
@@ -50,6 +51,7 @@ namespace ScriptDeck.Forms
         private ToolStripMenuItem menu_Tools_LaunchShell_PowerShell;
         private ToolStripMenuItem menu_Tools_LaunchShell_Cmd;
         private ToolStripMenuItem menu_Tools_LaunchShell_Python;
+        private ToolStripMenuItem menu_Tools_LaunchShell_Bash;
         private ToolStripSeparator menu_Tools_Sep0;
         private ToolStripSeparator menu_Tools_Sep1;
 
@@ -154,10 +156,12 @@ namespace ScriptDeck.Forms
             this.menu_Tools_ScriptEditor = new ToolStripMenuItem();
             this.menu_Tools_EditBootstrap = new ToolStripMenuItem();
             this.menu_Tools_ManageComputers = new ToolStripMenuItem();
+            this.menu_Tools_DetectInterpreters = new ToolStripMenuItem();
             this.menu_Tools_LaunchShell = new ToolStripMenuItem();
             this.menu_Tools_LaunchShell_PowerShell = new ToolStripMenuItem();
             this.menu_Tools_LaunchShell_Cmd = new ToolStripMenuItem();
             this.menu_Tools_LaunchShell_Python = new ToolStripMenuItem();
+            this.menu_Tools_LaunchShell_Bash = new ToolStripMenuItem();
             this.menu_Tools_Sep0 = new ToolStripSeparator();
             this.menu_Tools_Sep1 = new ToolStripSeparator();
 
@@ -378,6 +382,7 @@ namespace ScriptDeck.Forms
                 this.menu_Tools_ScriptEditor,
                 this.menu_Tools_EditBootstrap,
                 this.menu_Tools_ManageComputers,
+                this.menu_Tools_DetectInterpreters,
                 this.menu_Tools_Sep1,
                 this.menu_Tools_LaunchShell
             });
@@ -435,6 +440,17 @@ namespace ScriptDeck.Forms
             this.menu_Tools_ManageComputers.Text = "&Manage Computers...";
             this.menu_Tools_ManageComputers.Click += new System.EventHandler(this.menu_Tools_ManageComputers_Click);
             //
+            // menu_Tools_DetectInterpreters
+            //
+            // Re-runs the InterpreterDetector scan (clearing the cache
+            // first) and reposts the "Detected interpreters" section
+            // to the console RTB. Same code path as startup. Useful
+            // after installing a new Python, updating Git for Windows,
+            // adding a new WSL distro, etc.
+            this.menu_Tools_DetectInterpreters.Name = "menu_Tools_DetectInterpreters";
+            this.menu_Tools_DetectInterpreters.Text = "&Detect interpreters";
+            this.menu_Tools_DetectInterpreters.Click += new System.EventHandler(this.menu_Tools_DetectInterpreters_Click);
+            //
             // menu_Tools_Sep1 -- divider between authoring tools and shell-launchers.
             //
             this.menu_Tools_Sep1.Name = "menu_Tools_Sep1";
@@ -452,7 +468,8 @@ namespace ScriptDeck.Forms
             this.menu_Tools_LaunchShell.DropDownItems.AddRange(new ToolStripItem[] {
                 this.menu_Tools_LaunchShell_PowerShell,
                 this.menu_Tools_LaunchShell_Cmd,
-                this.menu_Tools_LaunchShell_Python
+                this.menu_Tools_LaunchShell_Python,
+                this.menu_Tools_LaunchShell_Bash
             });
             //
             this.menu_Tools_LaunchShell_PowerShell.Name = "menu_Tools_LaunchShell_PowerShell";
@@ -466,6 +483,10 @@ namespace ScriptDeck.Forms
             this.menu_Tools_LaunchShell_Python.Name = "menu_Tools_LaunchShell_Python";
             this.menu_Tools_LaunchShell_Python.Text = "P&ython";
             this.menu_Tools_LaunchShell_Python.Click += new System.EventHandler(this.menu_Tools_LaunchShell_Python_Click);
+            //
+            this.menu_Tools_LaunchShell_Bash.Name = "menu_Tools_LaunchShell_Bash";
+            this.menu_Tools_LaunchShell_Bash.Text = "&Bash";
+            this.menu_Tools_LaunchShell_Bash.Click += new System.EventHandler(this.menu_Tools_LaunchShell_Bash_Click);
 
             //
             // splitContainer_Outer — top: shared inputs band, bottom: everything else

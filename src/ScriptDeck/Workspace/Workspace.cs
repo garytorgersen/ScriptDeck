@@ -39,6 +39,19 @@ namespace ScriptDeck.Workspace
         /// workspace's Python buttons share dependency pinning.
         /// </summary>
         public string PythonInterpreter { get; set; }
+
+        /// <summary>
+        /// Workspace-level default Bash interpreter path. Used by every
+        /// Bash button in this workspace unless the button sets its own
+        /// <see cref="Button.BashInterpreter"/> override. Null / empty
+        /// falls through to bare "bash" on PATH and then to canonical
+        /// Git Bash install paths.
+        ///
+        /// Typical values:
+        ///   <c>C:\Program Files\Git\bin\bash.exe</c> (Git Bash) or
+        ///   <c>wsl.exe -d Ubuntu-22.04 bash</c> (WSL distro).
+        /// </summary>
+        public string BashInterpreter { get; set; }
     }
 
     /// <summary>
@@ -195,6 +208,19 @@ namespace ScriptDeck.Workspace
         /// Has no effect for executors other than python.
         /// </summary>
         public string PythonInterpreter { get; set; }
+
+        /// <summary>
+        /// Bash-only: per-button override of the bash interpreter path.
+        /// Resolution precedence: this property ->
+        /// Workspace.BashInterpreter -> bare "bash" on PATH -> canonical
+        /// Git Bash install paths (Program Files / x86). Null/empty
+        /// falls through.
+        ///
+        /// Typical values: a Git Bash bash.exe under Program Files, or
+        /// "wsl.exe -d Ubuntu-22.04 bash" to dispatch into a specific
+        /// WSL distro. Has no effect for executors other than bash.
+        /// </summary>
+        public string BashInterpreter { get; set; }
 
         // ---- Positioning ----
         // Coordinates are pixels. When GroupId is set, X/Y are RELATIVE

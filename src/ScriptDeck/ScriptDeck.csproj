@@ -82,6 +82,17 @@
     <Content Include="scriptdeck_bootstrap.py">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+
+    <!-- Bash bootstrap script. BashExecutor sets BASH_ENV pointing at
+         this file so user bash scripts auto-source the path-translation
+         and JSON-tag helpers. Must land next to the EXE (not a
+         subfolder). Note on line endings: this file is sourced as-is
+         by bash; CRLF would break the shebang and 'then' keyword
+         parsing on some shells. The build copies whatever the working
+         tree contains, so hand-edits should preserve LF. -->
+    <Content Include="scriptdeck_bootstrap.sh">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

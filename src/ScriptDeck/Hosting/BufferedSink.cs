@@ -23,7 +23,7 @@ namespace ScriptDeck.Hosting
     /// </summary>
     public sealed class BufferedSink : IOutputSink
     {
-        public enum Severity { Output, Error, Warning, Info, Verbose, Debug, Log }
+        public enum Severity { Output, Error, Warning, Info, Verbose, Debug, Log, Header }
 
         public sealed class Entry
         {
@@ -103,6 +103,7 @@ namespace ScriptDeck.Hosting
         public void WriteInfo(string text)    => Append(Severity.Info,    text);
         public void WriteVerbose(string text) => Append(Severity.Verbose, text);
         public void WriteDebug(string text)   => Append(Severity.Debug,   text);
+        public void WriteHeader(string text)  => Append(Severity.Header,  text);
 
         public void Log(string message)
         {
