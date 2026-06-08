@@ -1559,54 +1559,39 @@ namespace ScriptDeck.Forms
 
         private void menu_Tools_EditBootstrap_Click(object sender, EventArgs e)
         {
-            // The bootstrap is the .ps1 file dot-sourced into every fresh
-            // runspace; its path is the same one PowerShellExecutor uses
-            // (AppContext.BaseDirectory) so editing here is editing the
-            // exact file the executors load.
+            // ScriptDeck ships three bootstrap helper files -- one per
+            // supported language. Each is loaded automatically before
+            // that language's scripts run (PS: dot-sourced into the
+            // long-lived runspace; Python: imported via PYTHONPATH;
+            // Bash: sourced via BASH_ENV). The new EditBootstrapDialog
+            // wraps all three behind a selector dropdown so the user
+            // can edit and switch without leaving the editor.
             //
-            // Two caveats to surface up-front:
-            //
-            //   1. The file is overwritten by every build (Copy to output)
-            //      -- edits made here disappear on the next rebuild from
-            //      source. For permanent changes, edit the file under
-            //      src/ScriptDeck/ in the source tree.
-            //
-            //   2. If the install is in a write-protected location
-            //      (Program Files), the editor's save will fail. The user
-            //      sees the OS error directly; we don't try to elevate.
+            // The biggest UX subtlety: editing one bootstrap does NOT
+            // propagate to the others. If you add or change a helper
+            // and want it available in every language, you'll need to
+            // manually port it (with each language's syntax). We
+            // surface that warning up-front because it's the kind of
+            // thing users absolutely lose time on otherwise.
             if (_dispatcher == null) return;
-            string bootstrapPath = Path.Combine(AppContext.BaseDirectory, "ScriptDeck.Bootstrap.ps1");
-            if (!File.Exists(bootstrapPath))
-            {
-                MessageBox.Show(this,
-                    "ScriptDeck.Bootstrap.ps1 was not found at:\n\n" + bootstrapPath +
-                    "\n\nThe bootstrap file ships next to ScriptDeck.exe. " +
-                    "If it's missing, helpers like Write-Rtb, Write-Grid, and " +
-                    "Set-SharedInput won't be available.",
-                    "Bootstrap helper not found",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
 
-            // mtime captured BEFORE opening so we can detect any save
-            // performed inside the editor (including hand-edits made
-            // outside the app, if the user has the file open elsewhere).
-            // FileInfo.LastWriteTimeUtc avoids DST/local-time foot-guns.
-            var fi = new FileInfo(bootstrapPath);
-            DateTime mtimeBefore = fi.LastWriteTimeUtc;
+            // Cross-language warning up-front. Skippable via OK; the
+            // user proceeds to the editor regardless.
+            MessageBox.Show(this,
+                "ScriptDeck ships three bootstrap helper files:\n\n" +
+                "  - ScriptDeck.Bootstrap.ps1   (PowerShell)\n" +
+                "  - scriptdeck_bootstrap.py    (Python)\n" +
+                "  - scriptdeck_bootstrap.sh    (Bash)\n\n" +
+                "Each one defines the same conceptual helpers (Write-Rtb / write_rtb / " +
+                "scriptdeck_write_rtb, etc.) in that language's syntax.\n\n" +
+                "Editing one bootstrap does NOT propagate to the others. If you add or " +
+                "change a helper and want it available across all three executors, you " +
+                "will need to update each file manually with the matching syntax.",
+                "Editing bootstrap helpers",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
 
-            // Heads-up about the edits-lost-on-rebuild caveat. Shown
-            // once per click; users who don't like the modal can ignore
-            // it -- it's purely informational. (We don't suppress it
-            // with "don't show again" because the warning is short and
-            // the consequence -- silently losing your edits -- is real
-            // enough to warrant the reminder.)
-            //
-            // Skipped only when the running EXE is clearly the source
-            // build (Debug or Release output folder under the repo),
-            // since that's the case where the build will indeed clobber.
-            // For installed builds the file is the install copy, no
-            // build will overwrite it, so the warning is irrelevant.
+            // Build-output caveat (same logic as before; applies to ALL
+            // three bootstraps since all three are Content + PreserveNewest).
             string baseDirLower = AppContext.BaseDirectory.ToLowerInvariant().Replace('\\', '/');
             bool looksLikeBuildOutput =
                 baseDirLower.Contains("/bin/debug/") || baseDirLower.Contains("/bin/release/");
@@ -1614,61 +1599,64 @@ namespace ScriptDeck.Forms
             {
                 MessageBox.Show(this,
                     "Heads up: you're running the Debug/Release build output. The next " +
-                    "build will overwrite ScriptDeck.Bootstrap.ps1 with the source-tree " +
-                    "copy under src/ScriptDeck/. For permanent edits, modify the source " +
-                    "file instead.",
+                    "build will overwrite the bootstrap files with the source-tree copies " +
+                    "under src/ScriptDeck/. For permanent edits, modify the source files " +
+                    "instead.",
                     "Edits may be overwritten on next build",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
 
-            string scriptsRoot = _activeWorkspace?.ScriptsRoot
-                ?? (string.IsNullOrEmpty(_activeWorkspacePath) ? null : Path.GetDirectoryName(_activeWorkspacePath));
-            using (var dlg = new ScriptEditorDialog(_dispatcher, scriptsRoot, initialPath: bootstrapPath,
-                                                    sharedInputs: BuildSharedInputSnapshot()))
+            // Open the dialog. Default selection is PowerShell since
+            // that's the most-edited bootstrap historically.
+            ISet<EditBootstrapDialog.BootstrapKind> modified;
+            using (var dlg = new EditBootstrapDialog(EditBootstrapDialog.BootstrapKind.PowerShell))
             {
-                dlg.Text = "Edit Bootstrap Helper -- " + Path.GetFileName(bootstrapPath);
                 dlg.ShowDialog(this);
+                modified = dlg.ModifiedBootstraps;
             }
 
-            // Detect whether the bootstrap was actually saved during the
-            // session. mtime delta is the simplest signal -- works whether
-            // the user clicked Save inside the editor, or edited the file
-            // externally in another tool while the dialog was open.
-            DateTime mtimeAfter;
-            try { mtimeAfter = File.GetLastWriteTimeUtc(bootstrapPath); }
-            catch { mtimeAfter = mtimeBefore; }
-
-            if (mtimeAfter <= mtimeBefore) return;
-
-            // File changed. Offer to reload the PS runspaces so the
-            // edits take effect immediately. Default to Yes -- the
-            // user just edited the file, they almost certainly want it
-            // applied. No is the safety hatch for "I want to compare
-            // before reloading" or "I have a foreground job mid-run
-            // that I don't want killed."
-            var dr = MessageBox.Show(this,
-                "ScriptDeck.Bootstrap.ps1 was modified.\n\n" +
-                "Reload the PowerShell session now so the updated helpers " +
-                "take effect?\n\n" +
-                "(This cancels any script that's currently running.)",
-                "Reload PowerShell session?",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1);
-            if (dr != DialogResult.Yes) return;
-
-            try
+            // Post-edit: only PowerShell needs a runspace reset to pick
+            // up its bootstrap changes (the runspace dot-sources the PS1
+            // ONCE at creation). Python and Bash bootstraps are loaded
+            // on each script run via PYTHONPATH / BASH_ENV -- the next
+            // button click after a save automatically sees the new
+            // helpers.
+            if (modified.Contains(EditBootstrapDialog.BootstrapKind.PowerShell))
             {
-                _dispatcher.ResetExecutors();
-                Sink.Log("Reloaded PowerShell session after bootstrap edit.");
-                Sink.WriteInfo("Bootstrap helpers reloaded." + Environment.NewLine);
+                var dr = MessageBox.Show(this,
+                    "ScriptDeck.Bootstrap.ps1 was modified.\n\n" +
+                    "Reload the PowerShell session now so the updated helpers " +
+                    "take effect?\n\n" +
+                    "(This cancels any script that's currently running.)",
+                    "Reload PowerShell session?",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1);
+                if (dr == DialogResult.Yes)
+                {
+                    try
+                    {
+                        _dispatcher.ResetExecutors();
+                        Sink.Log("Reloaded PowerShell session after bootstrap edit.");
+                        Sink.WriteInfo("Bootstrap helpers reloaded." + Environment.NewLine);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(this,
+                            "Failed to reset the PowerShell session:\n\n" + ex.Message +
+                            "\n\nThe edits are saved to disk; restart ScriptDeck to apply them.",
+                            "Reset failed",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this,
-                    "Failed to reset the PowerShell session:\n\n" + ex.Message +
-                    "\n\nThe edits are saved to disk; restart ScriptDeck to apply them.",
-                    "Reset failed",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+
+            // Soft confirmation for Python / Bash mods -- they don't
+            // need a session reset, but logging the save is useful so
+            // the user can see in the bottom RTB that their work hit
+            // disk.
+            if (modified.Contains(EditBootstrapDialog.BootstrapKind.Python))
+                Sink.Log("scriptdeck_bootstrap.py saved (takes effect on next Python button click).");
+            if (modified.Contains(EditBootstrapDialog.BootstrapKind.Bash))
+                Sink.Log("scriptdeck_bootstrap.sh saved (takes effect on next Bash button click).");
         }
 
         /// <summary>

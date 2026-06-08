@@ -225,7 +225,7 @@ namespace ScriptDeck.Forms
             scintilla_Editor.Colorize(0, scintilla_Editor.TextLength);
         }
 
-        private static void ConfigurePowerShellLexer(ScintillaNET.Scintilla s)
+        internal static void ConfigurePowerShellLexer(ScintillaNET.Scintilla s)
         {
             // ScintillaNET's PowerShell lexer is the natural fit. We
             // set keyword set 0 (language keywords) and 1 (common
@@ -259,7 +259,7 @@ namespace ScriptDeck.Forms
             s.Styles[Style.PowerShell.CommentDocKeyword].ForeColor = Color.FromArgb(0, 96, 160);
         }
 
-        private static void ConfigurePythonLexer(ScintillaNET.Scintilla s)
+        internal static void ConfigurePythonLexer(ScintillaNET.Scintilla s)
         {
             // ScintillaNET's Python lexer covers keywords, strings,
             // triple-quoted strings, numbers, decorators, and class /
@@ -304,7 +304,7 @@ namespace ScriptDeck.Forms
             s.Styles[Style.Python.Decorator].ForeColor        = Color.FromArgb(128, 0, 128);
         }
 
-        private static void ConfigureBashLexer(ScintillaNET.Scintilla s)
+        internal static void ConfigureBashLexer(ScintillaNET.Scintilla s)
         {
             // ScintillaNET 3.6.3's Lexer enum doesn't include a Bash
             // entry, but the underlying Scintilla library DOES support
